@@ -1,0 +1,70 @@
+{
+  "name": "@andrii_kremlovskyi/playwright-traces-reader",
+  "version": "1.0.1",
+  "description": "Parse Playwright trace files into structured data for AI agents and tooling",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "playwright-traces-reader": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "templates/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "jest"
+  },
+  "keywords": [
+    "playwright",
+    "traces",
+    "github-copilot",
+    "llm",
+    "skills"
+  ],
+  "author": "Andrii Kremlovskyi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kremliovskyi/playwright-traces-reader"
+  },
+  "homepage": "https://github.com/Kremliovskyi/playwright-traces-reader#readme",
+  "bugs": {
+    "url": "https://github.com/Kremliovskyi/playwright-traces-reader/issues"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.5.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.6",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "module": "commonjs",
+            "moduleResolution": "node",
+            "esModuleInterop": true,
+            "types": [
+              "node",
+              "jest"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
