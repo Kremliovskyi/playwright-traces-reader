@@ -4,11 +4,15 @@ import * as fs from 'fs';
 import {
   prepareTraceDir,
   listTraces,
-  getFailedTests,
+  getTopLevelFailures,
+  getTestTitle,
   getTestSteps,
   getNetworkTraffic,
   extractScreenshots,
   getDomSnapshots,
+  getTimeline,
+  getSummary,
+  getFailedTestSummaries,
 } from '../src/index';
 
 // Three different report data dirs — each currently has exactly one SHA1 trace.
@@ -34,18 +38,6 @@ describe('playwright-traces-reader sanity', () => {
     expect(fs.existsSync(ctx.traceDir)).toBe(true);
     const testTrace = path.join(ctx.traceDir, 'test.trace');
     expect(fs.existsSync(testTrace)).toBe(true);
-  });
-
-  test('getFailedTests returns at least one failure with error details', async () => {
-    const failures = await getFailedTests(ctx);
-    expect(failures.length).toBeGreaterThan(0);
-
-    const first = failures[0]!;
-    expect(first.callId).toBeTruthy();
-    expect(first.title).toBeTruthy();
-    expect(first.error).toBeTruthy();
-    expect(typeof first.error.message).toBe('string');
-    expect(first.error.message.length).toBeGreaterThan(0);
   });
 
   test('getTestSteps returns a non-empty step tree with durations', async () => {
@@ -215,21 +207,288 @@ describe('listTraces — multi-test report support', () => {
     await fs.promises.rm(tmpDataDir, { recursive: true, force: true });
   });
 
-  test('getFailedTests works across all traces in a multi-test report', async () => {
-    // Aggregate failures across three reports (same as a real multi-test run)
+  test('getTopLevelFailures works across all traces in a multi-test report', async () => {
     const allDataDirs = [REPORT_A_DATA, REPORT_B_DATA, REPORT_C_DATA];
     const allFailures = [];
 
     for (const dataDir of allDataDirs) {
       const traces = await listTraces(dataDir);
       for (const t of traces) {
-        const failures = await getFailedTests(t);
+        const failures = await getTopLevelFailures(t);
         allFailures.push(...failures);
       }
     }
 
-    // At least one of the three reports should have failures
     expect(allFailures.length).toBeGreaterThan(0);
+  });
+});
+
+describe('getTopLevelFailures', () => {
+  let ctx: Awaited<ReturnType<typeof prepareTraceDir>>;
+
+  beforeAll(async () => {
+    const traceDir = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526');
+    const traceZip = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526.zip');
+    ctx = await prepareTraceDir(fs.existsSync(traceDir) ? traceDir : traceZip);
+  });
+
+  test('returns only root-level failed steps (each has error and children)', async () => {
+    const top = await getTopLevelFailures(ctx);
+    expect(top.length).toBeGreaterThan(0);
+    for (const step of top) {
+      expect(step.error).not.toBeNull();
+      expect(step.callId).toBeTruthy();
+      expect(step.title).toBeTruthy();
+      expect(Array.isArray(step.children)).toBe(true);
+    }
+  });
+
+  test('deduplication across listTraces gives unique test count', async () => {
+    const REPORT_4 = path.resolve(__dirname, '../../sc-tests/playwright-report 4/data');
+    if (!fs.existsSync(REPORT_4)) return; // skip if not available
+
+    const summaries = await getFailedTestSummaries(REPORT_4);
+    // 10 failed × 2 retries + 3 flaky × 1 trace = 23 traces → 13 unique failures
+    expect(summaries.length).toBe(13);
+    for (const s of summaries) {
+      expect(s.status).toBe('failed');
+    }
+  });
+});
+
+describe('getDomSnapshots with options', () => {
+  let ctx: Awaited<ReturnType<typeof prepareTraceDir>>;
+
+  beforeAll(async () => {
+    const traceDir = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526');
+    const traceZip = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526.zip');
+    ctx = await prepareTraceDir(fs.existsSync(traceDir) ? traceDir : traceZip);
+  });
+
+  test('near: last with limit returns tail entries', async () => {
+    const [all, tail] = await Promise.all([
+      getDomSnapshots(ctx),
+      getDomSnapshots(ctx, { near: 'last', limit: 3 }),
+    ]);
+    expect(tail.length).toBeLessThanOrEqual(3);
+    if (all.length >= 3) {
+      const lastCallId = all[all.length - 1]!.callId;
+      expect(tail[tail.length - 1]!.callId).toBe(lastCallId);
+    }
+  });
+
+  test('phase filter returns only entries with that phase populated', async () => {
+    const afterOnly = await getDomSnapshots(ctx, { phase: 'after' });
+    expect(afterOnly.length).toBeGreaterThan(0);
+    for (const s of afterOnly) {
+      expect(s.after).not.toBeNull();
+      expect(s.before).toBeNull();
+      expect(s.action).toBeNull();
+    }
+  });
+
+  test('limit without near caps from the beginning', async () => {
+    const [all, limited] = await Promise.all([
+      getDomSnapshots(ctx),
+      getDomSnapshots(ctx, { limit: 2 }),
+    ]);
+    expect(limited.length).toBeLessThanOrEqual(2);
+    if (all.length >= 2) {
+      expect(limited[0]!.callId).toBe(all[0]!.callId);
+    }
+  });
+
+  test('near: callId returns a window around that call', async () => {
+    const all = await getDomSnapshots(ctx);
+    if (all.length < 3) return; // skip if not enough data
+
+    const targetCallId = all[Math.floor(all.length / 2)]!.callId;
+    const window = await getDomSnapshots(ctx, { near: targetCallId, limit: 4 });
+    expect(window.length).toBeGreaterThan(0);
+    const callIds = window.map(e => e.callId);
+    expect(callIds).toContain(targetCallId);
+  });
+});
+
+describe('getTimeline', () => {
+  let ctx: Awaited<ReturnType<typeof prepareTraceDir>>;
+
+  beforeAll(async () => {
+    const traceDir = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526');
+    const traceZip = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526.zip');
+    ctx = await prepareTraceDir(fs.existsSync(traceDir) ? traceDir : traceZip);
+  });
+
+  test('returns entries of all 4 types', async () => {
+    const timeline = await getTimeline(ctx);
+    expect(timeline.length).toBeGreaterThan(0);
+    const types = new Set(timeline.map(e => e.type));
+    expect(types.has('step')).toBe(true);
+    expect(types.has('screenshot')).toBe(true);
+    expect(types.has('dom')).toBe(true);
+    expect(types.has('network')).toBe(true);
+  });
+
+  test('entries are sorted chronologically', async () => {
+    const timeline = await getTimeline(ctx);
+    for (let i = 1; i < timeline.length; i++) {
+      expect(timeline[i]!.timestamp).toBeGreaterThanOrEqual(timeline[i - 1]!.timestamp);
+    }
+  });
+
+  test('screenshot entries have no savedPath field', async () => {
+    const timeline = await getTimeline(ctx);
+    const shots = timeline.filter(e => e.type === 'screenshot');
+    expect(shots.length).toBeGreaterThan(0);
+    for (const s of shots) {
+      expect((s.data as any).savedPath).toBeUndefined();
+    }
+  });
+});
+
+describe('getSummary', () => {
+  let ctx: Awaited<ReturnType<typeof prepareTraceDir>>;
+
+  beforeAll(async () => {
+    const traceDir = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526');
+    const traceZip = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526.zip');
+    ctx = await prepareTraceDir(fs.existsSync(traceDir) ? traceDir : traceZip);
+  });
+
+  test('returns a summary with title, status, and durationMs', async () => {
+    const summary = await getSummary(ctx);
+    expect(summary.title).toBeTruthy();
+    expect(['passed', 'failed']).toContain(summary.status);
+    expect(summary.durationMs).not.toBeNull();
+    expect(summary.durationMs!).toBeGreaterThan(0);
+  });
+
+  test('failed trace has error and failureDomSnapshot', async () => {
+    const summary = await getSummary(ctx);
+    if (summary.status === 'failed') {
+      expect(summary.error).not.toBeNull();
+      expect(summary.error!.message.length).toBeGreaterThan(0);
+      expect(summary.failureDomSnapshot).not.toBeNull();
+    }
+  });
+
+  test('slowestSteps has at most 5 entries sorted descending', async () => {
+    const summary = await getSummary(ctx);
+    expect(summary.slowestSteps.length).toBeLessThanOrEqual(5);
+    for (let i = 1; i < summary.slowestSteps.length; i++) {
+      expect(summary.slowestSteps[i - 1]!.durationMs!).toBeGreaterThanOrEqual(
+        summary.slowestSteps[i]!.durationMs!
+      );
+    }
+  });
+
+  test('networkCalls contains all network entries (both api and browser)', async () => {
+    const summary = await getSummary(ctx);
+    const allTraffic = await getNetworkTraffic(ctx);
+    expect(summary.networkCalls.length).toBe(allTraffic.length);
+    const sources = new Set(summary.networkCalls.map(c => c.source));
+    // At least one source type must be present
+    expect(sources.size).toBeGreaterThan(0);
+  });
+
+  test('topLevelSteps are the non-hook root steps', async () => {
+    const [summary, roots] = await Promise.all([getSummary(ctx), getTestSteps(ctx)]);
+    const HOOK_TITLES = new Set(['Before Hooks', 'After Hooks', 'Worker Cleanup', 'Worker Cleanup Hooks', 'Worker Setup']);
+    const nonHookRoots = roots.filter(r => !HOOK_TITLES.has(r.title) && !r.title.startsWith('Attach "'));
+    expect(summary.topLevelSteps.length).toBe(nonHookRoots.length);
+    expect(summary.topLevelSteps.length).toBeGreaterThan(0);
+  });
+
+  test('testTitle is a non-null full Playwright title containing › separators', async () => {
+    const summary = await getSummary(ctx);
+    expect(summary.testTitle).not.toBeNull();
+    expect(summary.testTitle).toContain(' › ');
+  });
+});
+
+describe('getTestTitle', () => {
+  let ctx: Awaited<ReturnType<typeof prepareTraceDir>>;
+
+  beforeAll(async () => {
+    const traceDir = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526');
+    const traceZip = path.resolve(__dirname, '../../sc-tests/playwright-report 3/data/68e5ae746c4743054736c07b48a5f44e7eb65526.zip');
+    ctx = await prepareTraceDir(fs.existsSync(traceDir) ? traceDir : traceZip);
+  });
+
+  test('returns the full test title from context-options in a numbered trace file', async () => {
+    const title = await getTestTitle(ctx);
+    expect(title).not.toBeNull();
+    expect(typeof title).toBe('string');
+    expect(title!.length).toBeGreaterThan(0);
+  });
+
+  test('full title contains › separators (spec path, describe, test name)', async () => {
+    const title = await getTestTitle(ctx);
+    // Playwright full titles look like: "path/spec.ts:N › describe › test name"
+    expect(title).toContain(' › ');
+  });
+
+  test('full title is consistent for the same trace across multiple calls', async () => {
+    const [a, b] = await Promise.all([getTestTitle(ctx), getTestTitle(ctx)]);
+    expect(a).toBe(b);
+  });
+
+  test('dedup by testTitle across listTraces gives exact unique count for report 4', async () => {
+    const REPORT_4 = path.resolve(__dirname, '../../sc-tests/playwright-report 4/data');
+    if (!fs.existsSync(REPORT_4)) return; // skip if not available
+
+    const traces = await listTraces(REPORT_4);
+    const seen = new Set<string>();
+    for (const t of traces) {
+      const title = await getTestTitle(t);
+      if (title) seen.add(title);
+    }
+    // Report 4 has 10 failed + 3 flaky = 13 unique tests across 23 traces
+    expect(seen.size).toBe(13);
+  });
+});
+
+describe('getFailedTestSummaries', () => {
+  test('returns only failed summaries (no passing tests leak through)', async () => {
+    const traces = await listTraces(REPORT_A_DATA);
+    if (traces.length === 0) return;
+
+    const summaries = await getFailedTestSummaries(REPORT_A_DATA);
+    for (const s of summaries) {
+      expect(s.status).toBe('failed');
+    }
+  });
+
+  test('all testTitle values in results are unique (retries deduplicated)', async () => {
+    const summaries = await getFailedTestSummaries(REPORT_A_DATA);
+    const titles = summaries.map(s => s.testTitle ?? s.title);
+    const uniqueTitles = new Set(titles);
+    expect(uniqueTitles.size).toBe(titles.length);
+  });
+
+  test('each summary has the full TraceSummary shape', async () => {
+    const summaries = await getFailedTestSummaries(REPORT_A_DATA);
+    for (const s of summaries) {
+      expect(s.title).toBeTruthy();
+      expect(['passed', 'failed']).toContain(s.status);
+      expect(Array.isArray(s.topLevelSteps)).toBe(true);
+      expect(Array.isArray(s.slowestSteps)).toBe(true);
+      expect(Array.isArray(s.networkCalls)).toBe(true);
+    }
+  });
+
+  test('report 4: returns exactly 13 unique failures', async () => {
+    const REPORT_4 = path.resolve(__dirname, '../../sc-tests/playwright-report 4/data');
+    if (!fs.existsSync(REPORT_4)) return; // skip if not available
+
+    const summaries = await getFailedTestSummaries(REPORT_4);
+    expect(summaries.length).toBe(13);
+    for (const s of summaries) {
+      expect(s.status).toBe('failed');
+    }
+    // All testTitles unique
+    const titles = summaries.map(s => s.testTitle ?? s.title);
+    expect(new Set(titles).size).toBe(summaries.length);
   });
 });
 

@@ -3,18 +3,25 @@ export type { TraceContext } from './parseTrace';
 
 export {
   getTestSteps,
-  getFailedTests,
+  getTopLevelFailures,
+  getTestTitle,
   getNetworkTraffic,
   extractScreenshots,
   getDomSnapshots,
+  getTimeline,
+  getSummary,
+  getFailedTestSummaries,
 } from './extractors';
 
 export type {
   TestStep,
   TraceError,
-  FailedStep,
   NetworkEntry,
   Screenshot,
+  ScreenshotMetadata,
   DomSnapshot,
   ActionDomSnapshots,
+  DomSnapshotOptions,
+  TimelineEntry,
+  TraceSummary,
 } from './extractors';

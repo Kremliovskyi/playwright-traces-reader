@@ -24,7 +24,7 @@ All trace files use **Newline-Delimited JSON (NDJSON)** encoding.
 ```
 src/
   parseTrace.ts    — Low-level I/O: prepareTraceDir, listTraces, readNdjson, getResourceBuffer
-  extractors.ts    — High-level extractors: getTestSteps, getFailedTests, getNetworkTraffic, extractScreenshots, getDomSnapshots
+  extractors.ts    — High-level extractors and report-level helpers
   index.ts         — Public re-exports
   cli.ts           — CLI entry: `npx playwright-traces-reader init-skills`
 templates/
@@ -65,8 +65,10 @@ Parses `test.trace` by pairing `before` and `after` events via `callId`:
 - Each `TestStep` carries `title`, `method`, `startTime`, `endTime`, `durationMs`, `error`, and `children`.
 - Steps with no `parentId` (or whose parent wasn't emitted yet) become roots.
 
-#### `getFailedTests(ctx) → FailedStep[]`
-Calls `getTestSteps` then walks the full tree recursively, collecting every `TestStep` that has an `error`. Returns a flat list of `{ callId, title, error, durationMs }`.
+#### `getTopLevelFailures(ctx) → TestStep[]`
+Filters the root-level steps returned by `getTestSteps` to only those where `error !== null`. Returns the full `TestStep` objects (including `.children`), so callers can drill into nested steps to find the specific assertion or action that failed.
+
+This is a **cheap check** — it reads only `test.trace` and does no DOM/network I/O. `getFailedTestSummaries` uses it as a fast pre-filter to skip passing tests before building a full `TraceSummary`.
 
 #### `getNetworkTraffic(ctx) → NetworkEntry[]`
 Reads **all** `*.network` files (sorted, so context order is preserved). For each `resource-snapshot` entry:
@@ -81,7 +83,9 @@ Scans every `[N]-trace.trace` file (except `test.trace`) for `screencast-frame` 
 - Writes it as `screenshot-NNNN.jpeg` (or `.png`) into `outDir`.
 - Returns metadata including `savedPath` (absolute), `timestamp`, `pageId`, `width`, `height`.
 
-#### `getDomSnapshots(ctx) → ActionDomSnapshots[]`
+`Screenshot` is a superset of `ScreenshotMetadata` (same fields plus `savedPath`). `ScreenshotMetadata` (without `savedPath`) is what `getTimeline()` embeds in its entries to avoid unexpected disk writes.
+
+#### `getDomSnapshots(ctx, options?) → ActionDomSnapshots[]`
 Reads every `[N]-trace.trace` file (except `test.trace`) for `frame-snapshot` events.
 
 **Snapshot phases**: Each browser action emits up to three named snapshots in the trace:
@@ -90,6 +94,14 @@ Reads every `[N]-trace.trace` file (except `test.trace`) for `frame-snapshot` ev
 - `after@callId` — DOM state immediately _after_ the action completes  
 
 Results are aggregated per `callId` into `ActionDomSnapshots { callId, before, action, after }`.
+
+**`DomSnapshotOptions`** (optional second argument) filters the result set before returning:
+- `near: 'last'` — return the last `limit` entries (default 5). Best for "what was the page doing just before it failed?"
+- `near: 'call@N'` / any callId string — return a window of `limit` entries centred on that callId.
+- `phase: 'before' | 'action' | 'after'` — keep only entries where that phase is populated.
+- `limit: number` — max entries to return; caps from the beginning when `near` is omitted.
+
+Filtering is applied **after** the full snapshot set is resolved so back-reference chains are never broken.
 
 **Compact snapshot format**: Playwright stores DOM snapshots as nested arrays `["tagName", {attrs}, ...children]`. To reduce trace file size, repeated subtrees are replaced with **back-references**: `[[offset, nodeIdx]]` where:
 - `offset` — how many positions to look back in this frame's snapshot history  
@@ -102,6 +114,55 @@ Resolution algorithm (mirrors `snapshotNodes()` / `snapshotRenderer.ts` in `play
 4. Post-order DFS: text nodes are pushed **immediately**; element nodes are pushed **after** all their children. Subtree refs are **not** included in the DFS list.
 
 **Memoization**: `buildSnapshotNodeList()` is memoized per `html` object reference inside a single `getDomSnapshots()` call, reducing repeated reference chains from O(n × ref_count) to O(n) per snapshot.
+
+---
+
+#### `getTimeline(ctx) → TimelineEntry[]`
+Merges all four event types — steps, screenshots, DOM snapshots, network calls — into a single chronologically sorted array (`TimelineEntry[]`). Each entry has:
+- `timestamp` — wall-clock ms since epoch
+- `type` — `'step' | 'screenshot' | 'dom' | 'network'`
+- `data` — typed payload (cast based on `type`)
+
+Steps are **flattened** (all nesting levels). Screenshots are `ScreenshotMetadata` (no disk writes). The chronological interleaving lets callers build a narrative without manual timestamp correlation across four separate API calls.
+
+---
+
+#### `getTestTitle(ctx) → string | null`
+Reads numbered trace files (`0-trace.trace`, `1-trace.trace`, …) in order, looking for a `context-options` event that carries a `title` field. Returns the first match as the **full canonical test title** — a string like `"tests/auth.spec.ts:42 › describe › test name"` that includes the spec file path, describe block, and test name.
+
+This title is globally unique within a report run and is the correct deduplication key for retries. Returns `null` for pure API traces that have no browser context.
+
+---
+
+#### `getSummary(ctx) → TraceSummary`
+Builds a `TraceSummary` for a single `TraceContext` by running four sub-calls in parallel: `getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`. Then derives:
+- `title` — root `test.step()` title (failing step takes priority over longest non-hook step)
+- `status` — `'passed'` | `'failed'` based on whether any root step has an error
+- `durationMs` — duration of the main root step
+- `error` — top-level error from the main root step
+- `topLevelSteps` — non-hook root steps (filters out `Before Hooks`, `After Hooks`, `Worker Cleanup`, etc.)
+- `slowestSteps` — top 5 steps by duration across the full flattened tree
+- `networkCalls` — all network entries (both `source === 'api'` and `source === 'browser'`)
+- `failureDomSnapshot` — the `ActionDomSnapshots` whose timestamp is closest to the failure's `endTime`
+
+---
+
+#### `getFailedTestSummaries(reportDataDir) → TraceSummary[]`
+Report-level helper. Encapsulates the full "find unique failing tests" flow internally so callers never need to manage `listTraces`, retry deduplication, or the cheap/expensive call split.
+
+**Two-pass algorithm:**
+
+*Pass 1 — group and select last retry per unique test:*
+- `listTraces(reportDataDir)` — all trace contexts including retries and passing tests
+- For each ctx: `getTopLevelFailures(ctx)` (cheap — reads only `test.trace`)
+  - Empty → skip (passing test)
+  - Non-empty → `getTestTitle(ctx)` as dedup key (fallback: `ctx.traceDir` for pure API traces)
+  - Compute `latestEndTime` = max `endTime` (or `startTime`) across the top-level failures
+  - If key already in map and this ctx's `latestEndTime` is not greater → skip (earlier retry)
+  - Otherwise → store/replace `{ ctx, latestEndTime }` for this key
+
+*Pass 2 — build summaries only for winning (last) retry:*
+- For each entry in the map: `getSummary(ctx)` — the expensive call is made at most once per unique failing test, and always on the most recent execution.
 
 ---
 
@@ -118,15 +179,21 @@ Copies `templates/skills/analyze-playwright-traces/SKILL.md` into `<targetDir>/.
 ## Typical Usage Pattern (Multi-Test Report)
 
 ```typescript
-import { listTraces, getFailedTests, getNetworkTraffic } from 'playwright-traces-reader';
+import { getFailedTestSummaries } from 'playwright-traces-reader';
 
-// Point at the report's data/ directory — works for 1 test or 1000 tests
-const traces = await listTraces('/path/to/playwright-report/data');
+// Returns one TraceSummary per unique failing test — retries deduplicated,
+// passing tests excluded, last retry selected automatically.
+const failures = await getFailedTestSummaries('/path/to/playwright-report/data');
 
-for (const ctx of traces) {
-  const failures = await getFailedTests(ctx);
-  const traffic  = await getNetworkTraffic(ctx);
-  // ... process per-test results
+for (const f of failures) {
+  console.log(`FAILED: ${f.testTitle ?? f.title}`);
+  console.log(`Error: ${f.error?.message}`);
+  for (const call of f.networkCalls) {
+    console.log(`  ${call.method} ${call.url} → ${call.status}`);
+  }
+  if (f.failureDomSnapshot?.after) {
+    console.log('DOM at failure:', f.failureDomSnapshot.after.html.slice(0, 500));
+  }
 }
 ```
 
@@ -135,8 +202,8 @@ for (const ctx of traces) {
 ```
 playwright-report/data/
 ├── <sha1-a>/           ← TraceContext A
-│   ├── test.trace      ← getTestSteps / getFailedTests
-│   ├── 0-trace.trace   ← extractScreenshots / getDomSnapshots
+│   ├── test.trace      ← getTestSteps / getTopLevelFailures / getSummary
+│   ├── 0-trace.trace   ← extractScreenshots / getDomSnapshots / getTimeline / getTestTitle
 │   ├── 0-trace.network ← getNetworkTraffic (api traffic)
 │   ├── 8-trace.trace   ← extractScreenshots / getDomSnapshots (browser context)
 │   ├── 8-trace.network ← getNetworkTraffic (browser traffic)
@@ -149,6 +216,8 @@ playwright-report/data/
 
 ## Scalability & Extensibility
 
-- All extractor functions are stateless and `async`/awaitable — safe to run in parallel across many traces (e.g. `Promise.all(traces.map(getFailedTests))`).
+- All extractor functions are stateless and `async`/awaitable — safe to run in parallel across many traces.
+- `getSummary` runs its four sub-calls (`getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`) in parallel via `Promise.all`.
+- `getFailedTestSummaries` calls `getSummary` only for unique failing tests (not for passing tests or earlier retries), keeping its cost proportional to the number of distinct failures.
 - The skill template targets GitHub Copilot today but its Markdown/CLI-first design makes it straightforward to adapt for other agents (Claude, OpenAI Assistants, etc.).
 
