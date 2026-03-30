@@ -40,6 +40,16 @@ for (const f of failures) {
 }
 ```
 
+To exclude tests that were skipped via `test.skip()` inside the test body, pass `{ excludeSkipped: true }`:
+
+```typescript
+import { getFailedTestSummaries } from '@andrii_kremlovskyi/playwright-traces-reader';
+
+const failures = await getFailedTestSummaries('/path/to/playwright-report/data', { excludeSkipped: true });
+// in-body test.skip() calls are now excluded from the results
+// pre-annotated skips (suite annotations / conditional test.skip(condition)) are always excluded
+```
+
 ### 2. Inspect failure details
 
 Each item returned by `getFailedTestSummaries()` is a `TraceSummary` — it already contains everything needed for failure analysis. No second call required.
@@ -359,7 +369,7 @@ Using a fixed, recognisable filename makes it easy to spot and clean up if the a
 
 ## Tips
 
-- **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated and passing tests excluded. The returned `TraceSummary` already contains steps, API calls, and the DOM snapshot at failure.
+- **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated and passing tests excluded. The returned `TraceSummary` already contains steps, API calls, and the DOM snapshot at failure. Pass `{ excludeSkipped: true }` to also exclude tests that called `test.skip()` inside the test body.
 - **Starting point for per-context analysis**: Use `getSummary(ctx)` on a specific `TraceContext` from `listTraces()` — it gives `testTitle`, status, error, slowest steps, API calls, and the DOM snapshot closest to the failure in one call.
 - **Accurate failure count**: `getFailedTestSummaries()` deduplicates by the full Playwright title (spec path + describe + test name from `context-options`), correctly identifying 13 unique tests even when 23 traces exist (10 failed × 2 retries + 3 flaky × 1 trace). Using root step titles (`f.title`) would under-count when different tests share the same `test.step()` description.
 - **Drill into failures**: Each `TestStep` in `topLevelSteps` includes `.children`. Walk them recursively to find the specific assertion or action that failed within the test.

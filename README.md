@@ -90,12 +90,18 @@ console.log(`Error: ${summary.error?.message}`);
 
 ## API
 
-### `getFailedTestSummaries(reportDataDir)`
+### `getFailedTestSummaries(reportDataDir, options?)`
 
 Report-level helper. Returns `TraceSummary[]` — one entry per **unique** failing test:
 - Passing tests are skipped cheaply (no `getSummary` call).
 - Retries are deduplicated by the full test title from `context-options`. The **last retry** (highest root step `endTime`) is used so the summary reflects the most recent execution.
 - Pure API traces (no browser context) are deduplicated by `ctx.traceDir`.
+
+**`GetFailedTestSummariesOptions`** (optional second argument):
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `excludeSkipped` | `boolean` | `false` | Omit tests that called `test.skip()` inside the test body. Detected by an error message starting with `"Test is skipped:"`. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
 
 This is the recommended entry point for failure analysis. See [`TraceSummary`](#tracesummary) for the full field list.
 

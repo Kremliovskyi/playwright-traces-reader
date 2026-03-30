@@ -156,6 +156,7 @@ Report-level helper. Encapsulates the full "find unique failing tests" flow inte
 - `listTraces(reportDataDir)` — all trace contexts including retries and passing tests
 - For each ctx: `getTopLevelFailures(ctx)` (cheap — reads only `test.trace`)
   - Empty → skip (passing test)
+  - `options.excludeSkipped` is `true` and every top-level failure has `error.message` starting with `"Test is skipped:"` → skip (in-body `test.skip()` call)
   - Non-empty → `getTestTitle(ctx)` as dedup key (fallback: `ctx.traceDir` for pure API traces)
   - Compute `latestEndTime` = max `endTime` (or `startTime`) across the top-level failures
   - If key already in map and this ctx's `latestEndTime` is not greater → skip (earlier retry)
