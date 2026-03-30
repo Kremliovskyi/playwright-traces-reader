@@ -62,7 +62,7 @@ Resolves a SHA1 filename to its raw `Buffer` from `resources/`. Returns `null` i
 #### `getTestSteps(ctx) → TestStep[]`
 Parses `test.trace` by pairing `before` and `after` events via `callId`:
 - Builds a nested tree using `parentId` links.
-- Each `TestStep` carries `title`, `method`, `startTime`, `endTime`, `durationMs`, `error`, and `children`.
+- Each `TestStep` carries `title`, `method`, `startTime`, `endTime`, `durationMs`, `error`, `annotations`, and `children`.
 - Steps with no `parentId` (or whose parent wasn't emitted yet) become roots.
 
 #### `getTopLevelFailures(ctx) → TestStep[]`
@@ -156,7 +156,7 @@ Report-level helper. Encapsulates the full "find unique failing tests" flow inte
 - `listTraces(reportDataDir)` — all trace contexts including retries and passing tests
 - For each ctx: `getTopLevelFailures(ctx)` (cheap — reads only `test.trace`)
   - Empty → skip (passing test)
-  - `options.excludeSkipped` is `true` and every top-level failure has `error.message` starting with `"Test is skipped:"` → skip (in-body `test.skip()` call)
+  - `options.excludeSkipped` is `true` and every top-level failure has a `{ type: 'skip' }` annotation → skip (in-body `test.skip()` call)
   - Non-empty → `getTestTitle(ctx)` as dedup key (fallback: `ctx.traceDir` for pure API traces)
   - Compute `latestEndTime` = max `endTime` (or `startTime`) across the top-level failures
   - If key already in map and this ctx's `latestEndTime` is not greater → skip (earlier retry)

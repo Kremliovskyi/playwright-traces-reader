@@ -14,6 +14,7 @@ export {
 } from './extractors';
 
 export type {
+  StepAnnotation,
   TestStep,
   TraceError,
   NetworkEntry,

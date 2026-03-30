@@ -101,7 +101,7 @@ Report-level helper. Returns `TraceSummary[]` — one entry per **unique** faili
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `excludeSkipped` | `boolean` | `false` | Omit tests that called `test.skip()` inside the test body. Detected by an error message starting with `"Test is skipped:"`. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
+| `excludeSkipped` | `boolean` | `false` | Omit tests that called `test.skip()` inside the test body. Detected via `{ type: 'skip' }` annotations on the trace step events. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
 
 This is the recommended entry point for failure analysis. See [`TraceSummary`](#tracesummary) for the full field list.
 
@@ -138,6 +138,7 @@ Returns the full step tree from `test.trace` as `TestStep[]`. Each step has:
 | `endTime` | `number \| null` | Unix ms timestamp |
 | `durationMs` | `number \| null` | Wall-clock duration |
 | `error` | `TraceError \| null` | Error details if the step failed |
+| `annotations` | `StepAnnotation[]` | Step annotations (e.g. `{ type: 'skip' }` for skipped tests) |
 | `children` | `TestStep[]` | Nested child steps |
 
 ### `getNetworkTraffic(ctx)`

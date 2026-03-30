@@ -4,6 +4,11 @@ import { readNdjson, getResourceBuffer, listTraces, type TraceContext } from './
 
 // ---------- Types ----------
 
+export interface StepAnnotation {
+  type: string;
+  description?: string;
+}
+
 export interface TestStep {
   callId: string;
   parentId: string | null;
@@ -13,6 +18,7 @@ export interface TestStep {
   endTime: number | null;
   durationMs: number | null;
   error: TraceError | null;
+  annotations: StepAnnotation[];
   children: TestStep[];
 }
 
@@ -77,7 +83,7 @@ interface TraceEventAfter {
   type: 'after';
   callId: string;
   endTime: number;
-  annotations: unknown[];
+  annotations?: Array<{ type: string; description?: string }>;
   error?: TraceError;
 }
 
@@ -140,6 +146,7 @@ export async function getTestSteps(traceContext: TraceContext): Promise<TestStep
         endTime: null,
         durationMs: null,
         error: null,
+        annotations: [],
         children: [],
       };
       stepMap.set(event.callId, step);
@@ -161,6 +168,9 @@ export async function getTestSteps(traceContext: TraceContext): Promise<TestStep
         step.durationMs = event.endTime - step.startTime;
         if (event.error) {
           step.error = event.error;
+        }
+        if (event.annotations?.length) {
+          step.annotations = event.annotations;
         }
       }
     }
@@ -898,9 +908,10 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
 export interface GetFailedTestSummariesOptions {
   /**
    * When `true`, excludes tests whose only failures are in-body
-   * `test.skip()` calls (i.e. `TestSkipError`: error message starts with
-   * `"Test is skipped:"`). Pre-annotated skips are already excluded
-   * unconditionally because they produce no root-step failures.
+   * `test.skip()` calls. Detected via `{ type: 'skip' }` annotations on
+   * the trace step events. Pre-annotated skips (suite-level annotations or
+   * conditional `test.skip(condition)`) are already excluded unconditionally
+   * because they produce no root-step failures.
    */
   excludeSkipped?: boolean;
 }
@@ -942,10 +953,10 @@ export async function getFailedTestSummaries(reportDataDir: string, options?: Ge
     if (topFailures.length === 0) continue;
 
     // Exclude in-body test.skip() calls when requested. These produce a
-    // TestSkipError with message 'Test is skipped: …' on the root step.
+    // { type: 'skip' } annotation on the root step's 'after' trace event.
     if (options?.excludeSkipped) {
       const allSkipped = topFailures.every(
-        f => f.error?.message?.startsWith('Test is skipped:') ?? false,
+        f => f.annotations.some(a => a.type === 'skip'),
       );
       if (allSkipped) continue;
     }
