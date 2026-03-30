@@ -32,21 +32,28 @@ import { getFailedTestSummaries } from '@andrii_kremlovskyi/playwright-traces-re
 const failures = await getFailedTestSummaries('/path/to/playwright-report/data');
 // failures.length = number of distinct failing tests
 // Retries and passing tests are already excluded
+// Each result has an `outcome` field: 'unexpected' | 'flaky' | 'skipped' | null
 
 console.log(`Unique failed tests: ${failures.length}`);
 for (const f of failures) {
-  console.log(`FAILED: ${f.testTitle ?? f.title}`);
+  console.log(`[${f.outcome ?? 'unknown'}] ${f.testTitle ?? f.title}`);
   console.log(`Error: ${f.error?.message}`);
 }
 ```
 
-To exclude tests that were skipped via `test.skip()` inside the test body, pass `{ excludeSkipped: true }`:
+Each returned `TraceSummary` has an `outcome` field (`'unexpected'`, `'flaky'`, `'skipped'`, or `null`) populated from `report.json` when `index.html` is available alongside the trace data. Results are deduplicated by `testId` from `report.json` (falls back to `testTitle` then `traceDir`). You can filter by outcome on the caller side, or pass `{ excludeSkipped: true }` to exclude skipped tests automatically.
 
 ```typescript
 import { getFailedTestSummaries } from '@andrii_kremlovskyi/playwright-traces-reader';
 
+// Option A: get all non-passing results and filter by outcome
+const all = await getFailedTestSummaries('/path/to/playwright-report/data');
+const failed = all.filter(f => f.outcome === 'unexpected');
+const skipped = all.filter(f => f.outcome === 'skipped');
+const flaky = all.filter(f => f.outcome === 'flaky');
+
+// Option B: exclude skipped tests automatically
 const failures = await getFailedTestSummaries('/path/to/playwright-report/data', { excludeSkipped: true });
-// in-body test.skip() calls are now excluded from the results
 // pre-annotated skips (suite annotations / conditional test.skip(condition)) are always excluded
 ```
 
@@ -103,6 +110,7 @@ for (const f of failures) {
 `TraceSummary` fields:
 - **`testTitle`** — **full unique test title** from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces with no browser context.
 - **`title`** — root `test.step()` title (from `test.trace`). The failing step or longest non-hook step.
+- **`outcome`** — `'expected'` | `'unexpected'` | `'flaky'` | `'skipped'` | `null`. Populated from `report.json` when `index.html` is available; `null` when called via `getSummary()` or when report metadata is unavailable.
 - **`status`** — `'passed'` | `'failed'`
 - **`durationMs`** — duration of the main test step
 - **`error`** — the top-level error, or `null` if passed
@@ -369,9 +377,9 @@ Using a fixed, recognisable filename makes it easy to spot and clean up if the a
 
 ## Tips
 
-- **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated and passing tests excluded. The returned `TraceSummary` already contains steps, API calls, and the DOM snapshot at failure. Pass `{ excludeSkipped: true }` to also exclude tests that called `test.skip()` inside the test body.
+- **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated (by `testId` from `report.json`) and passing tests excluded. Each result has an `outcome` field (`'unexpected'`, `'flaky'`, `'skipped'`, or `null`). Pass `{ excludeSkipped: true }` to exclude skipped tests.
 - **Starting point for per-context analysis**: Use `getSummary(ctx)` on a specific `TraceContext` from `listTraces()` — it gives `testTitle`, status, error, slowest steps, API calls, and the DOM snapshot closest to the failure in one call.
-- **Accurate failure count**: `getFailedTestSummaries()` deduplicates by the full Playwright title (spec path + describe + test name from `context-options`), correctly identifying 13 unique tests even when 23 traces exist (10 failed × 2 retries + 3 flaky × 1 trace). Using root step titles (`f.title`) would under-count when different tests share the same `test.step()` description.
+- **Accurate failure count**: `getFailedTestSummaries()` deduplicates by `testId` from `report.json` (falls back to `testTitle` then `traceDir`), correctly identifying 13 unique tests even when 23 traces exist (10 failed × 2 retries + 3 flaky × 1 trace).
 - **Drill into failures**: Each `TestStep` in `topLevelSteps` includes `.children`. Walk them recursively to find the specific assertion or action that failed within the test.
 - **Failures**: The `error.message` in a `TraceSummary` contains the full diff for assertion failures.
 - **Network issues**: `summary.networkCalls` contains all HTTP calls (API and browser). Filter by `source === 'api'` for Node.js `APIRequestContext` calls or `source === 'browser'` for XHR/fetch/navigation. Check `status >= 400` for HTTP errors.

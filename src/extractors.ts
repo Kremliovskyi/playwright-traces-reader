@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { readNdjson, getResourceBuffer, listTraces, type TraceContext } from './parseTrace';
+import { readNdjson, getResourceBuffer, listTraces, getReportMetadata, type TraceContext } from './parseTrace';
 
 // ---------- Types ----------
 
@@ -824,6 +824,17 @@ export interface TraceSummary {
   networkCalls: NetworkEntry[];
   /** The DOM snapshot (before/action/after) closest in time to the failure, or null if passed. */
   failureDomSnapshot: ActionDomSnapshots | null;
+  /**
+   * Test outcome from the HTML report's `report.json` when available.
+   * Populated by `getFailedTestSummaries()` — always `null` from `getSummary()` directly.
+   *
+   * - `'unexpected'` — the test failed (all retries exhausted)
+   * - `'skipped'` — the test was skipped via `test.skip()`
+   * - `'flaky'` — the test eventually passed after retries
+   * - `'expected'` — the test passed (should not appear in failed summaries)
+   * - `null` — outcome unknown (`report.json` not available)
+   */
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
 }
 
 /**
@@ -897,6 +908,7 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
     slowestSteps,
     networkCalls,
     failureDomSnapshot,
+    outcome: null,
   };
 }
 
@@ -907,11 +919,22 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
  */
 export interface GetFailedTestSummariesOptions {
   /**
-   * When `true`, excludes tests whose only failures are in-body
-   * `test.skip()` calls. Detected via `{ type: 'skip' }` annotations on
-   * the trace step events. Pre-annotated skips (suite-level annotations or
-   * conditional `test.skip(condition)`) are already excluded unconditionally
-   * because they produce no root-step failures.
+   * When `true`, excludes tests that were skipped via `test.skip()`.
+   *
+   * Detection strategy (in priority order):
+   * 1. **`report.json`** (authoritative) — the HTML report embeds a ZIP with
+   *    structured test metadata. Each test result's `attachments` array
+   *    contains `{ name: "trace", path: "data/<sha1>.zip" }` entries that
+   *    map directly to trace directories by SHA1 basename. If `index.html`
+   *    is found, skipped tests are identified by `outcome === 'skipped'`
+   *    and matched to traces via this SHA1 mapping.
+   * 2. **Trace heuristic** (fallback) — when `index.html` is not available,
+   *    falls back to checking trace step data: a `{ type: 'skip' }` annotation
+   *    or an error message containing `"Test is skipped:"`.
+   *
+   * Pre-annotated skips (suite-level annotations or conditional
+   * `test.skip(condition)` evaluated before the test body) are already
+   * excluded unconditionally because they produce no root-step failures.
    */
   excludeSkipped?: boolean;
 }
@@ -921,48 +944,95 @@ export interface GetFailedTestSummariesOptions {
  * an entire Playwright report data directory and returns a `TraceSummary` for
  * each one.
  *
+ * Each returned `TraceSummary` has an `outcome` field populated from `report.json`
+ * when `index.html` is available:
+ * - `'unexpected'` — the test failed (all retries exhausted)
+ * - `'skipped'` — the test was skipped via `test.skip()`
+ * - `'flaky'` — the test eventually passed after retries
+ * - `null` — `report.json` not available
+ *
  * Handles three tricky cases automatically:
  * - **Passing tests**: skipped cheaply (no `getSummary` call) by checking
  *   `getTopLevelFailures()` first.
- * - **Retries**: deduplicated by the full unique title from `getTestTitle()`
- *   (`context-options` event in a numbered trace file), which includes the
- *   spec file path, describe block, and test name. When multiple retries exist
- *   for the same test, the **last retry** (highest root step `endTime`) is used
- *   — it reflects the most recent execution and has the most relevant DOM
- *   snapshot and network traffic for debugging.
+ * - **Retries**: deduplicated by `testId` from `report.json` (when available),
+ *   falling back to `getTestTitle()` or `ctx.traceDir`. When multiple retries
+ *   exist for the same test, the **last retry** (highest root step `endTime`)
+ *   is used — it reflects the most recent execution and has the most relevant
+ *   DOM snapshot and network traffic for debugging.
  * - **Pure API traces** (no browser context, so `getTestTitle` returns `null`):
- *   deduplicated by `ctx.traceDir` as a fallback.
+ *   deduplicated by `testId` from `report.json` when available (same as browser
+ *   traces), falling back to `ctx.traceDir` only when `report.json` is absent.
  *
  * @param reportDataDir  Path to the `playwright-report/data/` directory.
  * @param options        Optional filtering options.
- * @returns `TraceSummary[]` for each unique failing test (one per unique title).
+ * @returns `TraceSummary[]` for each unique failing test (one per unique test).
  */
 export async function getFailedTestSummaries(reportDataDir: string, options?: GetFailedTestSummariesOptions): Promise<TraceSummary[]> {
   const traces = await listTraces(reportDataDir);
 
-  // --- Pass 1: group failing trace contexts by unique test title ---
-  // Multiple contexts with the same title are retries of the same test.
+  // Always try to load report.json for:
+  // 1. Authoritative outcome data (skip detection + TraceSummary.outcome)
+  // 2. testId-based dedup (fixes null-title API traces having duplicate retries)
+  let outcomeByTraceSha1: Map<string, string> | null = null;
+  let testIdByTraceSha1: Map<string, string> | null = null;
+  const meta = await getReportMetadata(reportDataDir);
+  if (meta) {
+    outcomeByTraceSha1 = new Map();
+    testIdByTraceSha1 = new Map();
+    for (const file of meta.files) {
+      for (const t of file.tests) {
+        for (const result of t.results) {
+          for (const att of result.attachments) {
+            if (att.name === 'trace' && att.path) {
+              // att.path is like "data/<sha1>.zip"
+              const sha1 = path.basename(att.path, '.zip');
+              outcomeByTraceSha1.set(sha1, t.outcome);
+              testIdByTraceSha1.set(sha1, t.testId);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- Pass 1: group failing trace contexts by unique test key ---
+  // Multiple contexts with the same key are retries of the same test.
   // We keep track of the latest end time seen for each key so we can
   // select the last retry (the most recent execution) in Pass 2.
-  type CtxMeta = { ctx: TraceContext; latestEndTime: number };
-  const byTitle = new Map<string, CtxMeta>();
+  type Outcome = TraceSummary['outcome'];
+  type CtxMeta = { ctx: TraceContext; latestEndTime: number; outcome: Outcome };
+  const byKey = new Map<string, CtxMeta>();
 
   for (const ctx of traces) {
     // Cheap check — reads only test.trace. Skip passing tests immediately.
     const topFailures = await getTopLevelFailures(ctx);
     if (topFailures.length === 0) continue;
 
-    // Exclude in-body test.skip() calls when requested. These produce a
-    // { type: 'skip' } annotation on the root step's 'after' trace event.
+    const sha1 = path.basename(ctx.traceDir);
+    const outcome: Outcome = outcomeByTraceSha1?.get(sha1) as Outcome ?? null;
+
+    // Exclude skipped tests when requested.
     if (options?.excludeSkipped) {
-      const allSkipped = topFailures.every(
-        f => f.annotations.some(a => a.type === 'skip'),
-      );
-      if (allSkipped) continue;
+      let isSkipped = false;
+
+      if (outcomeByTraceSha1) {
+        if (outcome === 'skipped') isSkipped = true;
+      } else {
+        // Fallback heuristic when report.json is unavailable:
+        // check step annotations and error messages.
+        isSkipped = topFailures.every(
+          f => f.annotations.some(a => a.type === 'skip') ||
+               f.error?.message?.includes('Test is skipped:'),
+        );
+      }
+
+      if (isSkipped) continue;
     }
 
-    const title = await getTestTitle(ctx);
-    const key = title ?? ctx.traceDir;
+    // Dedup key: testId from report.json (works for all trace types including
+    // API-only), then getTestTitle, then traceDir as last resort.
+    const testId = testIdByTraceSha1?.get(sha1);
+    const key = testId ?? (await getTestTitle(ctx)) ?? ctx.traceDir;
 
     // Use the latest endTime of any root step as the proxy for when this
     // retry finished. Fall back to 0 if no step has an endTime.
@@ -971,16 +1041,17 @@ export async function getFailedTestSummaries(reportDataDir: string, options?: Ge
       0,
     );
 
-    const existing = byTitle.get(key);
+    const existing = byKey.get(key);
     if (!existing || latestEndTime > existing.latestEndTime) {
-      byTitle.set(key, { ctx, latestEndTime });
+      byKey.set(key, { ctx, latestEndTime, outcome });
     }
   }
 
   // --- Pass 2: build summaries only for the last retry of each unique failure ---
   const results: TraceSummary[] = [];
-  for (const { ctx } of byTitle.values()) {
-    results.push(await getSummary(ctx));
+  for (const { ctx, outcome } of byKey.values()) {
+    const summary = await getSummary(ctx);
+    results.push({ ...summary, outcome });
   }
 
   return results;

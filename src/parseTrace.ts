@@ -107,3 +107,68 @@ export async function listTraces(reportDataDir: string): Promise<TraceContext[]>
   return Promise.all(tracePaths.map(p => prepareTraceDir(p)));
 }
 
+// ---------- Report metadata ----------
+
+/** A single test's summary as stored in the HTML report's `report.json`. */
+export interface ReportTestSummary {
+  testId: string;
+  title: string;
+  path: string[];
+  projectName: string;
+  location: { file: string; line: number; column: number };
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped';
+  duration: number;
+  ok: boolean;
+  annotations: Array<{ type: string; description?: string }>;
+  tags: string[];
+  results: Array<{
+    attachments: Array<{ name: string; path?: string; contentType: string }>;
+  }>;
+}
+
+/** The top-level structure of a Playwright HTML report's `report.json`. */
+export interface ReportMetadata {
+  stats: { total: number; expected: number; unexpected: number; flaky: number; skipped: number; ok: boolean };
+  files: Array<{ fileId: string; fileName: string; tests: ReportTestSummary[] }>;
+  projectNames: string[];
+  startTime: number;
+  duration: number;
+}
+
+/**
+ * Parses the `report.json` embedded inside a Playwright HTML report.
+ *
+ * The HTML reporter embeds all test metadata as a base64-encoded ZIP inside a
+ * `<template id="playwrightReportBase64">` tag in `index.html`. This function
+ * extracts that ZIP and returns the parsed `report.json`.
+ *
+ * @param reportDir  Path to the report root directory (the folder containing
+ *                   `index.html` and `data/`). If a `data/` directory path is
+ *                   provided instead, the function looks one level up.
+ * @returns Parsed report metadata, or `null` if `index.html` is not found or
+ *          does not contain the expected template tag.
+ */
+export async function getReportMetadata(reportDir: string): Promise<ReportMetadata | null> {
+  // Accept both the report root and the data/ subdirectory.
+  let htmlPath = path.join(reportDir, 'index.html');
+  if (!fs.existsSync(htmlPath)) {
+    // Caller may have passed `/path/to/report/data` — try parent.
+    const parent = path.dirname(reportDir);
+    htmlPath = path.join(parent, 'index.html');
+    if (!fs.existsSync(htmlPath)) return null;
+  }
+
+  const html = await fs.promises.readFile(htmlPath, 'utf-8');
+  const match = html.match(/id="playwrightReportBase64"[^>]*>([^<]+)</);
+  if (!match?.[1]) return null;
+
+  const dataUri = match[1].trim();
+  const base64 = dataUri.replace(/^data:application\/zip;base64,/, '');
+  const buf = Buffer.from(base64, 'base64');
+  const zip = new AdmZip(buf);
+  const reportEntry = zip.getEntry('report.json');
+  if (!reportEntry) return null;
+
+  return JSON.parse(zip.readAsText(reportEntry)) as ReportMetadata;
+}
+

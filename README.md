@@ -94,14 +94,14 @@ console.log(`Error: ${summary.error?.message}`);
 
 Report-level helper. Returns `TraceSummary[]` — one entry per **unique** failing test:
 - Passing tests are skipped cheaply (no `getSummary` call).
-- Retries are deduplicated by the full test title from `context-options`. The **last retry** (highest root step `endTime`) is used so the summary reflects the most recent execution.
-- Pure API traces (no browser context) are deduplicated by `ctx.traceDir`.
+- Retries are deduplicated by `testId` from `report.json` when `index.html` is available, falling back to `getTestTitle()` or `ctx.traceDir`. The **last retry** (highest root step `endTime`) is used so the summary reflects the most recent execution.
+- Each returned summary has an `outcome` field (`'unexpected'` | `'skipped'` | `'flaky'` | `null`) from `report.json`, so callers can filter or group by outcome.
 
 **`GetFailedTestSummariesOptions`** (optional second argument):
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `excludeSkipped` | `boolean` | `false` | Omit tests that called `test.skip()` inside the test body. Detected via `{ type: 'skip' }` annotations on the trace step events. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
+| `excludeSkipped` | `boolean` | `false` | Omit tests that were skipped via `test.skip()`. When `index.html` is found next to the `data/` directory, maps trace directories to test outcomes via `report.json` (each test result's trace attachment path contains the SHA1 directory name). Falls back to checking trace step annotations and error messages when `index.html` is not available. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
 
 This is the recommended entry point for failure analysis. See [`TraceSummary`](#tracesummary) for the full field list.
 
@@ -216,7 +216,8 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 |---|---|---|
 | `testTitle` | `string \| null` | Full unique title from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces. |
 | `title` | `string` | Root `test.step()` title (failing step or longest non-hook step) |
-| `status` | `'passed' \| 'failed'` | Test outcome |
+| `status` | `'passed' \| 'failed'` | Test pass/fail from trace data |
+| `outcome` | `'expected' \| 'unexpected' \| 'flaky' \| 'skipped' \| null` | Authoritative outcome from `report.json`. Populated by `getFailedTestSummaries()`; `null` from `getSummary()` or when `index.html` is absent. |
 | `durationMs` | `number \| null` | Duration of the main root step |
 | `error` | `TraceError \| null` | Top-level error, or `null` if passed |
 | `topLevelSteps` | `TestStep[]` | Non-hook root steps (the visible `test.step()` blocks), each with `.children` |
@@ -227,6 +228,10 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 ### `getResourceBuffer(ctx, sha1)`
 
 Low-level helper. Resolves a SHA1 filename to a raw `Buffer` from `resources/`. Returns `null` if not found.
+
+### `getReportMetadata(reportDir)`
+
+Parses the `report.json` embedded inside a Playwright HTML report's `index.html`. Returns `ReportMetadata` with test outcomes, stats, and file summaries — or `null` if `index.html` is not found. Accepts either the report root directory or the `data/` subdirectory.
 
 ### `readNdjson<T>(filePath)`
 

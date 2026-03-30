@@ -147,8 +147,16 @@ Builds a `TraceSummary` for a single `TraceContext` by running four sub-calls in
 
 ---
 
-#### `getFailedTestSummaries(reportDataDir) → TraceSummary[]`
+#### `getFailedTestSummaries(reportDataDir, options?) → TraceSummary[]`
 Report-level helper. Encapsulates the full "find unique failing tests" flow internally so callers never need to manage `listTraces`, retry deduplication, or the cheap/expensive call split.
+
+**Skip detection** (`options.excludeSkipped`):
+- When `index.html` is found next to `data/`, parses the embedded `report.json` ZIP and builds a `Map<sha1, outcome>` from each test result's trace attachment path (`data/<sha1>.zip` → sha1). Each trace directory's basename is looked up directly — works for all trace types (browser and API-only).
+- If `index.html` is not available, falls back to a heuristic for all traces: `{ type: 'skip' }` step annotations or error messages containing `"Test is skipped:"`.
+
+**Dedup**: When `report.json` is available, uses `testId` (shared across retries) as the dedup key — works for all trace types including API-only. Falls back to `getTestTitle()` → `ctx.traceDir`.
+
+**Outcome**: Each returned `TraceSummary` has an `outcome` field populated from `report.json` (`'unexpected'`, `'skipped'`, `'flaky'`, or `null` when unavailable).
 
 **Two-pass algorithm:**
 
@@ -156,14 +164,28 @@ Report-level helper. Encapsulates the full "find unique failing tests" flow inte
 - `listTraces(reportDataDir)` — all trace contexts including retries and passing tests
 - For each ctx: `getTopLevelFailures(ctx)` (cheap — reads only `test.trace`)
   - Empty → skip (passing test)
-  - `options.excludeSkipped` is `true` and every top-level failure has a `{ type: 'skip' }` annotation → skip (in-body `test.skip()` call)
-  - Non-empty → `getTestTitle(ctx)` as dedup key (fallback: `ctx.traceDir` for pure API traces)
+  - `options.excludeSkipped` is `true` → look up trace SHA1 in report.json outcome map (or heuristic) → skip if skipped
+  - Dedup key: `testId` from report.json (or `getTestTitle` → `ctx.traceDir`)
   - Compute `latestEndTime` = max `endTime` (or `startTime`) across the top-level failures
   - If key already in map and this ctx's `latestEndTime` is not greater → skip (earlier retry)
   - Otherwise → store/replace `{ ctx, latestEndTime }` for this key
 
 *Pass 2 — build summaries only for winning (last) retry:*
 - For each entry in the map: `getSummary(ctx)` — the expensive call is made at most once per unique failing test, and always on the most recent execution.
+
+---
+
+#### `getReportMetadata(reportDir) → ReportMetadata | null`
+Parses the `report.json` embedded inside a Playwright HTML report's `index.html`. The HTML reporter encodes all test metadata (outcomes, stats, file summaries) as a base64-encoded ZIP in a `<template id="playwrightReportBase64">` tag. This function extracts that ZIP and returns the parsed JSON.
+
+Accepts either the report root directory (containing `index.html`) or the `data/` subdirectory (looks one level up). Returns `null` if `index.html` is not found or does not contain the expected template tag.
+
+`ReportMetadata` contains:
+- `stats` — aggregate counts (`total`, `expected`, `unexpected`, `flaky`, `skipped`)
+- `files` — array of `{ fileId, fileName, tests: ReportTestSummary[] }`
+- `projectNames`, `startTime`, `duration`
+
+Each `ReportTestSummary` includes `testId`, `title`, `path`, `outcome`, `location`, `annotations`, `tags`, `duration`, and `results` (array of result objects, each with `attachments` containing trace paths like `data/<sha1>.zip`).
 
 ---
 
