@@ -24,4 +24,5 @@ export type {
   DomSnapshotOptions,
   TimelineEntry,
   TraceSummary,
+  GetFailedTestSummariesOptions,
 } from './extractors';

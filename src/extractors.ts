@@ -893,6 +893,19 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
 // ---------- getFailedTestSummaries ----------
 
 /**
+ * Options for {@link getFailedTestSummaries}.
+ */
+export interface GetFailedTestSummariesOptions {
+  /**
+   * When `true`, excludes tests whose only failures are in-body
+   * `test.skip()` calls (i.e. `TestSkipError`: error message starts with
+   * `"Test is skipped:"`). Pre-annotated skips are already excluded
+   * unconditionally because they produce no root-step failures.
+   */
+  excludeSkipped?: boolean;
+}
+
+/**
  * High-level report-level helper: finds all **unique** failing tests across
  * an entire Playwright report data directory and returns a `TraceSummary` for
  * each one.
@@ -910,9 +923,10 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
  *   deduplicated by `ctx.traceDir` as a fallback.
  *
  * @param reportDataDir  Path to the `playwright-report/data/` directory.
+ * @param options        Optional filtering options.
  * @returns `TraceSummary[]` for each unique failing test (one per unique title).
  */
-export async function getFailedTestSummaries(reportDataDir: string): Promise<TraceSummary[]> {
+export async function getFailedTestSummaries(reportDataDir: string, options?: GetFailedTestSummariesOptions): Promise<TraceSummary[]> {
   const traces = await listTraces(reportDataDir);
 
   // --- Pass 1: group failing trace contexts by unique test title ---
@@ -926,6 +940,15 @@ export async function getFailedTestSummaries(reportDataDir: string): Promise<Tra
     // Cheap check — reads only test.trace. Skip passing tests immediately.
     const topFailures = await getTopLevelFailures(ctx);
     if (topFailures.length === 0) continue;
+
+    // Exclude in-body test.skip() calls when requested. These produce a
+    // TestSkipError with message 'Test is skipped: …' on the root step.
+    if (options?.excludeSkipped) {
+      const allSkipped = topFailures.every(
+        f => f.error?.message?.startsWith('Test is skipped:') ?? false,
+      );
+      if (allSkipped) continue;
+    }
 
     const title = await getTestTitle(ctx);
     const key = title ?? ctx.traceDir;
