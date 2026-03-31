@@ -172,3 +172,41 @@ export async function getReportMetadata(reportDir: string): Promise<ReportMetada
   return JSON.parse(zip.readAsText(reportEntry)) as ReportMetadata;
 }
 
+// ---------- Report trace maps ----------
+
+/** Pre-built lookup maps from report metadata, keyed by trace SHA1. */
+export interface ReportTraceMaps {
+  outcomeByTraceSha1: Map<string, string>;
+  testIdByTraceSha1: Map<string, string>;
+}
+
+/**
+ * Builds SHA1-keyed lookup maps from parsed report metadata.
+ *
+ * Iterates over all test results and their trace attachments to create
+ * two maps:
+ * - `outcomeByTraceSha1` — maps a trace's SHA1 to the test's outcome
+ * - `testIdByTraceSha1`  — maps a trace's SHA1 to the test's unique ID
+ *
+ * @param meta  Parsed report metadata from `getReportMetadata()`.
+ */
+export function buildReportTraceMaps(meta: ReportMetadata): ReportTraceMaps {
+  const outcomeByTraceSha1 = new Map<string, string>();
+  const testIdByTraceSha1 = new Map<string, string>();
+  for (const file of meta.files) {
+    for (const t of file.tests) {
+      for (const result of t.results) {
+        for (const att of result.attachments) {
+          if (att.name === 'trace' && att.path) {
+            // att.path is like "data/<sha1>.zip"
+            const sha1 = path.basename(att.path, '.zip');
+            outcomeByTraceSha1.set(sha1, t.outcome);
+            testIdByTraceSha1.set(sha1, t.testId);
+          }
+        }
+      }
+    }
+  }
+  return { outcomeByTraceSha1, testIdByTraceSha1 };
+}
+

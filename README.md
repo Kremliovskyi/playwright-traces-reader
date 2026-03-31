@@ -78,12 +78,22 @@ for (const f of failures) {
 ```typescript
 import {
   prepareTraceDir,
+  getReportMetadata,
   getSummary,
 } from '@andrii_kremlovskyi/playwright-traces-reader';
 
 // Point at a single extracted trace directory (or a .zip)
 const ctx = await prepareTraceDir('/path/to/playwright-report/data/<sha1>');
-const summary = await getSummary(ctx);
+
+// Load report metadata for outcome info (pass null if unavailable)
+const meta = await getReportMetadata('/path/to/playwright-report');
+
+// For a single trace, pass reportMetadata directly:
+const summary = await getSummary(ctx, { reportMetadata: meta });
+
+// For many traces, pre-build maps to avoid redundant work:
+// const maps = meta ? buildReportTraceMaps(meta) : null;
+// const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: maps });
 console.log(`[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`);
 console.log(`Error: ${summary.error?.message}`);
 ```
@@ -105,9 +115,14 @@ Report-level helper. Returns `TraceSummary[]` — one entry per **unique** faili
 
 This is the recommended entry point for failure analysis. See [`TraceSummary`](#tracesummary) for the full field list.
 
-### `getSummary(ctx)`
+### `getSummary(ctx, options)`
 
-Builds a `TraceSummary` for a single `TraceContext`. Use this when you already have a specific `ctx` from `listTraces()` and want a full snapshot without routing through `getFailedTestSummaries`.
+Builds a `TraceSummary` for a single `TraceContext`. Requires an `options: GetSummaryOptions` object:
+
+| Option | Type | Required | Description |
+|---|---|---|---|
+| `reportMetadata` | `ReportMetadata \| null` | Yes | Parsed report metadata from `getReportMetadata()`. When provided, `outcome` is populated from `report.json`. Pass `null` when unavailable. |
+| `reportTraceMaps` | `ReportTraceMaps \| null` | No | Pre-built lookup maps from `buildReportTraceMaps()`. Avoids rebuilding maps on every call when invoking `getSummary` in a loop. If omitted, maps are built on-the-fly. |
 
 ### `listTraces(reportDataDir)`
 
@@ -217,7 +232,7 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 | `testTitle` | `string \| null` | Full unique title from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces. |
 | `title` | `string` | Root `test.step()` title (failing step or longest non-hook step) |
 | `status` | `'passed' \| 'failed'` | Test pass/fail from trace data |
-| `outcome` | `'expected' \| 'unexpected' \| 'flaky' \| 'skipped' \| null` | Authoritative outcome from `report.json`. Populated by `getFailedTestSummaries()`; `null` from `getSummary()` or when `index.html` is absent. |
+| `outcome` | `'expected' \| 'unexpected' \| 'flaky' \| 'skipped' \| null` | Authoritative outcome from `report.json`. Populated when `reportMetadata` is passed to `getSummary()` or automatically by `getFailedTestSummaries()`. `null` when `reportMetadata` is `null` or trace SHA1 not found. |
 | `durationMs` | `number \| null` | Duration of the main root step |
 | `error` | `TraceError \| null` | Top-level error, or `null` if passed |
 | `topLevelSteps` | `TestStep[]` | Non-hook root steps (the visible `test.step()` blocks), each with `.children` |
@@ -228,6 +243,14 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 ### `getResourceBuffer(ctx, sha1)`
 
 Low-level helper. Resolves a SHA1 filename to a raw `Buffer` from `resources/`. Returns `null` if not found.
+
+### `buildReportTraceMaps(meta)`
+
+Builds SHA1-keyed lookup maps from parsed `ReportMetadata`. Returns `ReportTraceMaps` with:
+- `outcomeByTraceSha1` — maps trace SHA1 to test outcome (`'expected'` | `'unexpected'` | `'flaky'` | `'skipped'`)
+- `testIdByTraceSha1` — maps trace SHA1 to test ID
+
+Pre-build the maps and pass them to `getSummary()` via `reportTraceMaps` when calling it in a loop to avoid redundant work.
 
 ### `getReportMetadata(reportDir)`
 

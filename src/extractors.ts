@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { readNdjson, getResourceBuffer, listTraces, getReportMetadata, type TraceContext } from './parseTrace';
+import { readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps, type TraceContext, type ReportMetadata, type ReportTraceMaps } from './parseTrace';
 
 // ---------- Types ----------
 
@@ -826,15 +826,34 @@ export interface TraceSummary {
   failureDomSnapshot: ActionDomSnapshots | null;
   /**
    * Test outcome from the HTML report's `report.json` when available.
-   * Populated by `getFailedTestSummaries()` — always `null` from `getSummary()` directly.
+   * Populated when `reportMetadata` is passed to `getSummary()` or
+   * automatically by `getFailedTestSummaries()`.
    *
    * - `'unexpected'` — the test failed (all retries exhausted)
    * - `'skipped'` — the test was skipped via `test.skip()`
    * - `'flaky'` — the test eventually passed after retries
    * - `'expected'` — the test passed (should not appear in failed summaries)
-   * - `null` — outcome unknown (`report.json` not available)
+   * - `null` — outcome unknown (`reportMetadata` was `null` or trace SHA1 not found)
    */
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+}
+
+/** Options for {@link getSummary}. */
+export interface GetSummaryOptions {
+  /**
+   * Parsed report metadata from `getReportMetadata()`. When provided, the
+   * returned `TraceSummary.outcome` is populated by matching the trace's SHA1
+   * against test results in the report. Pass `null` when report metadata is
+   * unavailable — `outcome` will be `null`.
+   */
+  reportMetadata: ReportMetadata | null;
+  /**
+   * Pre-built trace lookup maps from `buildReportTraceMaps()`. When provided,
+   * avoids rebuilding the maps on every call — useful when calling `getSummary`
+   * in a loop with the same report metadata. If omitted, maps are built
+   * on-the-fly from `reportMetadata`.
+   */
+  reportTraceMaps?: ReportTraceMaps | null;
 }
 
 /**
@@ -843,7 +862,7 @@ export interface TraceSummary {
  * covers the 90% case without requiring separate calls to getTestSteps(),
  * getNetworkTraffic(), and getDomSnapshots().
  */
-export async function getSummary(traceContext: TraceContext): Promise<TraceSummary> {
+export async function getSummary(traceContext: TraceContext, options: GetSummaryOptions): Promise<TraceSummary> {
   const [roots, network, domAll, testTitle] = await Promise.all([
     getTestSteps(traceContext),
     getNetworkTraffic(traceContext),
@@ -908,7 +927,9 @@ export async function getSummary(traceContext: TraceContext): Promise<TraceSumma
     slowestSteps,
     networkCalls,
     failureDomSnapshot,
-    outcome: null,
+    outcome: options.reportMetadata
+      ? (options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata)).outcomeByTraceSha1.get(path.basename(traceContext.traceDir)) as TraceSummary['outcome'] ?? null
+      : null,
   };
 }
 
@@ -973,34 +994,16 @@ export async function getFailedTestSummaries(reportDataDir: string, options?: Ge
   // Always try to load report.json for:
   // 1. Authoritative outcome data (skip detection + TraceSummary.outcome)
   // 2. testId-based dedup (fixes null-title API traces having duplicate retries)
-  let outcomeByTraceSha1: Map<string, string> | null = null;
-  let testIdByTraceSha1: Map<string, string> | null = null;
   const meta = await getReportMetadata(reportDataDir);
-  if (meta) {
-    outcomeByTraceSha1 = new Map();
-    testIdByTraceSha1 = new Map();
-    for (const file of meta.files) {
-      for (const t of file.tests) {
-        for (const result of t.results) {
-          for (const att of result.attachments) {
-            if (att.name === 'trace' && att.path) {
-              // att.path is like "data/<sha1>.zip"
-              const sha1 = path.basename(att.path, '.zip');
-              outcomeByTraceSha1.set(sha1, t.outcome);
-              testIdByTraceSha1.set(sha1, t.testId);
-            }
-          }
-        }
-      }
-    }
-  }
+  const traceMaps = meta ? buildReportTraceMaps(meta) : null;
+  const outcomeByTraceSha1 = traceMaps?.outcomeByTraceSha1 ?? null;
+  const testIdByTraceSha1 = traceMaps?.testIdByTraceSha1 ?? null;
 
   // --- Pass 1: group failing trace contexts by unique test key ---
   // Multiple contexts with the same key are retries of the same test.
   // We keep track of the latest end time seen for each key so we can
   // select the last retry (the most recent execution) in Pass 2.
-  type Outcome = TraceSummary['outcome'];
-  type CtxMeta = { ctx: TraceContext; latestEndTime: number; outcome: Outcome };
+  type CtxMeta = { ctx: TraceContext; latestEndTime: number };
   const byKey = new Map<string, CtxMeta>();
 
   for (const ctx of traces) {
@@ -1009,7 +1012,7 @@ export async function getFailedTestSummaries(reportDataDir: string, options?: Ge
     if (topFailures.length === 0) continue;
 
     const sha1 = path.basename(ctx.traceDir);
-    const outcome: Outcome = outcomeByTraceSha1?.get(sha1) as Outcome ?? null;
+    const outcome = outcomeByTraceSha1?.get(sha1) ?? null;
 
     // Exclude skipped tests when requested.
     if (options?.excludeSkipped) {
@@ -1043,15 +1046,15 @@ export async function getFailedTestSummaries(reportDataDir: string, options?: Ge
 
     const existing = byKey.get(key);
     if (!existing || latestEndTime > existing.latestEndTime) {
-      byKey.set(key, { ctx, latestEndTime, outcome });
+      byKey.set(key, { ctx, latestEndTime });
     }
   }
 
   // --- Pass 2: build summaries only for the last retry of each unique failure ---
   const results: TraceSummary[] = [];
-  for (const { ctx, outcome } of byKey.values()) {
-    const summary = await getSummary(ctx);
-    results.push({ ...summary, outcome });
+  for (const { ctx } of byKey.values()) {
+    const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
+    results.push(summary);
   }
 
   return results;

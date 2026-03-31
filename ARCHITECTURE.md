@@ -134,8 +134,12 @@ This title is globally unique within a report run and is the correct deduplicati
 
 ---
 
-#### `getSummary(ctx) → TraceSummary`
-Builds a `TraceSummary` for a single `TraceContext` by running four sub-calls in parallel: `getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`. Then derives:
+#### `getSummary(ctx, options) → TraceSummary`
+Builds a `TraceSummary` for a single `TraceContext` by running four sub-calls in parallel: `getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`. Requires `options: GetSummaryOptions`:
+- `reportMetadata: ReportMetadata | null` — when provided, the trace's SHA1 is looked up in the report to populate `outcome`; when `null`, `outcome` is `null`.
+- `reportTraceMaps?: ReportTraceMaps | null` — pre-built lookup maps from `buildReportTraceMaps()`. When provided, avoids rebuilding the maps on every call — important when calling `getSummary` in a loop with the same report metadata. If omitted or `null`, maps are built on-the-fly from `reportMetadata`.
+
+Then derives:
 - `title` — root `test.step()` title (failing step takes priority over longest non-hook step)
 - `status` — `'passed'` | `'failed'` based on whether any root step has an error
 - `durationMs` — duration of the main root step
@@ -171,7 +175,16 @@ Report-level helper. Encapsulates the full "find unique failing tests" flow inte
   - Otherwise → store/replace `{ ctx, latestEndTime }` for this key
 
 *Pass 2 — build summaries only for winning (last) retry:*
-- For each entry in the map: `getSummary(ctx)` — the expensive call is made at most once per unique failing test, and always on the most recent execution.
+- For each entry in the map: `getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps })` — the expensive call is made at most once per unique failing test, and always on the most recent execution. Pre-built `traceMaps` are passed through so the maps are built once rather than on every `getSummary` call.
+
+---
+
+#### `buildReportTraceMaps(meta) → ReportTraceMaps`
+Builds SHA1-keyed lookup maps from parsed `ReportMetadata`. Iterates over all test results and their trace attachments to create two maps:
+- `outcomeByTraceSha1` — maps a trace directory's SHA1 basename to the test's outcome (`'expected'`, `'unexpected'`, `'flaky'`, `'skipped'`)
+- `testIdByTraceSha1` — maps a trace directory's SHA1 basename to the test's unique ID
+
+Used by `getSummary` internally (on-the-fly when `reportTraceMaps` is not provided) and by `getFailedTestSummaries` for both outcome lookup and `testId`-based deduplication. Callers can pre-build the maps via `buildReportTraceMaps(meta)` and pass them to `getSummary` in a loop to avoid redundant rebuilds.
 
 ---
 

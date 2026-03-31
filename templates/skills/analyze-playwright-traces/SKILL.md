@@ -110,7 +110,7 @@ for (const f of failures) {
 `TraceSummary` fields:
 - **`testTitle`** — **full unique test title** from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces with no browser context.
 - **`title`** — root `test.step()` title (from `test.trace`). The failing step or longest non-hook step.
-- **`outcome`** — `'expected'` | `'unexpected'` | `'flaky'` | `'skipped'` | `null`. Populated from `report.json` when `index.html` is available; `null` when called via `getSummary()` or when report metadata is unavailable.
+- **`outcome`** — `'expected'` | `'unexpected'` | `'flaky'` | `'skipped'` | `null`. Populated from `report.json` when `reportMetadata` is passed to `getSummary()` or automatically by `getFailedTestSummaries()`; `null` when report metadata is unavailable.
 - **`status`** — `'passed'` | `'failed'`
 - **`durationMs`** — duration of the main test step
 - **`error`** — the top-level error, or `null` if passed
@@ -279,13 +279,16 @@ for (const entry of timeline.slice(-10)) {
 A Playwright report's `data/` directory holds **one SHA1 entry per test execution** (including retries). `getFailedTestSummaries()` handles this automatically. For lower-level iteration use `listTraces()`:
 
 ```typescript
-import { listTraces, getSummary } from '@andrii_kremlovskyi/playwright-traces-reader';
+import { listTraces, getSummary, getReportMetadata, buildReportTraceMaps } from '@andrii_kremlovskyi/playwright-traces-reader';
 
 // Works for 1 test or many — automatically discovers all SHA1 trace entries (dirs and zips)
 const traces = await listTraces('/path/to/playwright-report/data');
+const meta = await getReportMetadata('/path/to/playwright-report/data');
+// Pre-build maps once for the loop to avoid redundant work
+const maps = meta ? buildReportTraceMaps(meta) : null;
 
 for (const ctx of traces) {
-  const summary = await getSummary(ctx);
+  const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: maps });
   // ... process results per test (includes passing, failing, and retries)
 }
 ```
@@ -294,15 +297,16 @@ Each entry is either a directory (already extracted) or a `.zip` (auto-extracted
 
 ## Low-Level Utilities
 
-### `getSummary(ctx)`
+### `getSummary(ctx, options)`
 
-Builds a `TraceSummary` for a single `TraceContext`. Use this when you already have a specific `ctx` (e.g. from `listTraces()` without filtering). For report-level failure analysis, prefer `getFailedTestSummaries()` which calls this internally only for unique failures.
+Builds a `TraceSummary` for a single `TraceContext`. Requires `options: { reportMetadata: ReportMetadata | null }`. Optionally accepts `reportTraceMaps` (pre-built via `buildReportTraceMaps()`) to avoid rebuilding maps on every call in a loop. Use this when you already have a specific `ctx` (e.g. from `listTraces()` without filtering). For report-level failure analysis, prefer `getFailedTestSummaries()` which calls this internally only for unique failures.
 
 ```typescript
-import { prepareTraceDir, getSummary } from '@andrii_kremlovskyi/playwright-traces-reader';
+import { prepareTraceDir, getSummary, getReportMetadata } from '@andrii_kremlovskyi/playwright-traces-reader';
 
 const ctx = await prepareTraceDir('/path/to/trace-dir');
-const summary = await getSummary(ctx);
+const meta = await getReportMetadata('/path/to/playwright-report');
+const summary = await getSummary(ctx, { reportMetadata: meta });
 console.log(`[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`);
 ```
 
@@ -378,7 +382,7 @@ Using a fixed, recognisable filename makes it easy to spot and clean up if the a
 ## Tips
 
 - **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated (by `testId` from `report.json`) and passing tests excluded. Each result has an `outcome` field (`'unexpected'`, `'flaky'`, `'skipped'`, or `null`). Pass `{ excludeSkipped: true }` to exclude skipped tests.
-- **Starting point for per-context analysis**: Use `getSummary(ctx)` on a specific `TraceContext` from `listTraces()` — it gives `testTitle`, status, error, slowest steps, API calls, and the DOM snapshot closest to the failure in one call.
+- **Starting point for per-context analysis**: Use `getSummary(ctx, { reportMetadata: meta })` on a specific `TraceContext` from `listTraces()` — it gives `testTitle`, status, error, slowest steps, API calls, and the DOM snapshot closest to the failure in one call. Pass `reportMetadata: null` if `index.html` is unavailable.
 - **Accurate failure count**: `getFailedTestSummaries()` deduplicates by `testId` from `report.json` (falls back to `testTitle` then `traceDir`), correctly identifying 13 unique tests even when 23 traces exist (10 failed × 2 retries + 3 flaky × 1 trace).
 - **Drill into failures**: Each `TestStep` in `topLevelSteps` includes `.children`. Walk them recursively to find the specific assertion or action that failed within the test.
 - **Failures**: The `error.message` in a `TraceSummary` contains the full diff for assertion failures.

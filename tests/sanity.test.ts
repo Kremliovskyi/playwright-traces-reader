@@ -356,7 +356,7 @@ describe('getSummary', () => {
   });
 
   test('returns a summary with title, status, and durationMs', async () => {
-    const summary = await getSummary(ctx);
+    const summary = await getSummary(ctx, { reportMetadata: null });
     expect(summary.title).toBeTruthy();
     expect(['passed', 'failed']).toContain(summary.status);
     expect(summary.durationMs).not.toBeNull();
@@ -364,7 +364,7 @@ describe('getSummary', () => {
   });
 
   test('failed trace has error and failureDomSnapshot', async () => {
-    const summary = await getSummary(ctx);
+    const summary = await getSummary(ctx, { reportMetadata: null });
     if (summary.status === 'failed') {
       expect(summary.error).not.toBeNull();
       expect(summary.error!.message.length).toBeGreaterThan(0);
@@ -373,7 +373,7 @@ describe('getSummary', () => {
   });
 
   test('slowestSteps has at most 5 entries sorted descending', async () => {
-    const summary = await getSummary(ctx);
+    const summary = await getSummary(ctx, { reportMetadata: null });
     expect(summary.slowestSteps.length).toBeLessThanOrEqual(5);
     for (let i = 1; i < summary.slowestSteps.length; i++) {
       expect(summary.slowestSteps[i - 1]!.durationMs!).toBeGreaterThanOrEqual(
@@ -383,7 +383,7 @@ describe('getSummary', () => {
   });
 
   test('networkCalls contains all network entries (both api and browser)', async () => {
-    const summary = await getSummary(ctx);
+    const summary = await getSummary(ctx, { reportMetadata: null });
     const allTraffic = await getNetworkTraffic(ctx);
     expect(summary.networkCalls.length).toBe(allTraffic.length);
     const sources = new Set(summary.networkCalls.map(c => c.source));
@@ -392,7 +392,7 @@ describe('getSummary', () => {
   });
 
   test('topLevelSteps are the non-hook root steps', async () => {
-    const [summary, roots] = await Promise.all([getSummary(ctx), getTestSteps(ctx)]);
+    const [summary, roots] = await Promise.all([getSummary(ctx, { reportMetadata: null }), getTestSteps(ctx)]);
     const HOOK_TITLES = new Set(['Before Hooks', 'After Hooks', 'Worker Cleanup', 'Worker Cleanup Hooks', 'Worker Setup']);
     const nonHookRoots = roots.filter(r => !HOOK_TITLES.has(r.title) && !r.title.startsWith('Attach "'));
     expect(summary.topLevelSteps.length).toBe(nonHookRoots.length);
@@ -400,7 +400,7 @@ describe('getSummary', () => {
   });
 
   test('testTitle is a non-null full Playwright title containing › separators', async () => {
-    const summary = await getSummary(ctx);
+    const summary = await getSummary(ctx, { reportMetadata: null });
     expect(summary.testTitle).not.toBeNull();
     expect(summary.testTitle).toContain(' › ');
   });

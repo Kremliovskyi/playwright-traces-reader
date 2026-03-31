@@ -1,5 +1,5 @@
-export { prepareTraceDir, readNdjson, getResourceBuffer, listTraces, getReportMetadata } from './parseTrace';
-export type { TraceContext, ReportTestSummary, ReportMetadata } from './parseTrace';
+export { prepareTraceDir, readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps } from './parseTrace';
+export type { TraceContext, ReportTestSummary, ReportMetadata, ReportTraceMaps } from './parseTrace';
 
 export {
   getTestSteps,
@@ -25,5 +25,6 @@ export type {
   DomSnapshotOptions,
   TimelineEntry,
   TraceSummary,
+  GetSummaryOptions,
   GetFailedTestSummariesOptions,
 } from './extractors';
