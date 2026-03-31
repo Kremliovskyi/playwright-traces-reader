@@ -9,7 +9,7 @@ Use this skill when the user asks about test failures, API payloads in tests, sl
 
 ## Prerequisites
 
-This skill requires the `@kremlovskyi/playwright-traces-reader` npm package in the project:
+This skill requires the `@andrii_kremlovskyi/playwright-traces-reader` npm package in the project:
 ```bash
 npm install @andrii_kremlovskyi/playwright-traces-reader
 ```
@@ -315,7 +315,7 @@ console.log(`[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.ti
 Takes a single path (directory or `.zip`) and returns a `TraceContext`. Use this when you have a specific trace path rather than a whole `data/` directory.
 
 ```typescript
-import { prepareTraceDir } from '@kremlovskyi/playwright-traces-reader';
+import { prepareTraceDir } from '@andrii_kremlovskyi/playwright-traces-reader';
 
 const ctx = await prepareTraceDir('/path/to/playwright-report/data/<sha1>');
 // or a zip:
@@ -383,7 +383,7 @@ Using a fixed, recognisable filename makes it easy to spot and clean up if the a
 
 - **Starting point for report-level failures**: Use `getFailedTestSummaries(dataDir)` — returns `TraceSummary[]` for every unique failing test with retries deduplicated (by `testId` from `report.json`) and passing tests excluded. Each result has an `outcome` field (`'unexpected'`, `'flaky'`, `'skipped'`, or `null`). Pass `{ excludeSkipped: true }` to exclude skipped tests.
 - **Starting point for per-context analysis**: Use `getSummary(ctx, { reportMetadata: meta })` on a specific `TraceContext` from `listTraces()` — it gives `testTitle`, status, error, slowest steps, API calls, and the DOM snapshot closest to the failure in one call. Pass `reportMetadata: null` if `index.html` is unavailable.
-- **Accurate failure count**: `getFailedTestSummaries()` deduplicates by `testId` from `report.json` (falls back to `testTitle` then `traceDir`), correctly identifying 13 unique tests even when 23 traces exist (10 failed × 2 retries + 3 flaky × 1 trace).
+- **Accurate failure count**: `getFailedTestSummaries()` deduplicates by `testId` from `report.json` (falls back to `testTitle` then `traceDir`).
 - **Drill into failures**: Each `TestStep` in `topLevelSteps` includes `.children`. Walk them recursively to find the specific assertion or action that failed within the test.
 - **Failures**: The `error.message` in a `TraceSummary` contains the full diff for assertion failures.
 - **Network issues**: `summary.networkCalls` contains all HTTP calls (API and browser). Filter by `source === 'api'` for Node.js `APIRequestContext` calls or `source === 'browser'` for XHR/fetch/navigation. Check `status >= 400` for HTTP errors.
