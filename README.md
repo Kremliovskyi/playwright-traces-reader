@@ -9,6 +9,7 @@ See [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md) for in-process library usag
 
 ## Features
 
+- Search a local `playwright-reports` hub for reports by metadata, date, and recency before parsing (`search-reports`, `prepare-report`)
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
 - One-call failure summary: title, error, step tree, slowest steps, API calls, and DOM snapshot at failure (`getSummary`)
 - Extract test steps with timings and errors (`getTestSteps`, `getTopLevelFailures`)
@@ -31,6 +32,8 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 The package exposes a local CLI. In a repository that has the package installed, use it with `npx`:
 
 ```bash
+npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
@@ -38,6 +41,8 @@ npx playwright-traces-reader network ./playwright-report/data/<sha1>
 
 Phase 1 commands:
 
+- `search-reports [query]` — search a local `playwright-reports` hub by metadata/date/recency
+- `prepare-report <reportRef>` — resolve a searched report into local analysis-ready paths
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
 - `failures <reportPath>` — report-level unique failing test analysis
 - `summary <tracePath>` — one-call trace summary
@@ -58,6 +63,13 @@ Optional output mode:
 
 JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
 
+Hub-assisted discovery details:
+
+- `search-reports` and `prepare-report` talk to a local `playwright-reports` hub.
+- Default hub URL: `http://127.0.0.1:9333`
+- Override with `--base-url <url>` or `PLAYWRIGHT_REPORTS_BASE_URL`
+- If no report is specified by path, `reportRef`, metadata, date, or recency hint, the default local analysis target should be `./playwright-report`
+
 `failures` is a compact triage command. It returns minimal report-level records, including `tracePath` and `traceSha1`, so the next step is to run `summary <tracePath>` for full trace details.
 
 Typical CLI workflow:
@@ -65,6 +77,15 @@ Typical CLI workflow:
 ```bash
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader summary /absolute/path/to/playwright-report/data/<sha1>
+```
+
+Hub-assisted workflow:
+
+```bash
+npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader prepare-report <reportRef>
+npx playwright-traces-reader failures <reportRootPath>
+npx playwright-traces-reader summary <tracePath>
 ```
 
 Use `--format text` only when you explicitly want terminal-oriented output instead of the default JSON response.
@@ -88,6 +109,12 @@ Like the other CLI commands, `init-skills` now returns JSON by default and suppo
 The preferred interface for agents and test repositories is the CLI.
 
 For in-process integrations such as future `playwright-reports` usage, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
+
+Important boundary:
+
+- `playwright-traces-reader` owns parsing and analysis.
+- `playwright-reports` owns report inventory, metadata/date search, and local path resolution.
+- The hub-assisted commands reuse that external discovery boundary without turning this package into a report catalog.
 
 ## Trace Format
 

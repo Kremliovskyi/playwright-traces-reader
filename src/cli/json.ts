@@ -6,6 +6,7 @@ import type {
   TimelineEntry,
   TraceSummary,
 } from '../index';
+import type { HubReportDescriptor } from './helpers';
 
 export const CLI_JSON_SCHEMA_VERSION = 1 as const;
 
@@ -27,6 +28,22 @@ export interface InitSkillsCommandJson {
   schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   command: 'init-skills';
   skillPath: string;
+}
+
+export interface SearchReportsCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'search-reports';
+  totalCount: number;
+  reports: HubReportDescriptor[];
+}
+
+export interface PrepareReportCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'prepare-report';
+  mode: string;
+  report: HubReportDescriptor;
+  reportRootPath: string | null;
+  reportDataPath: string | null;
 }
 
 export interface FailuresCommandJson {
@@ -86,6 +103,8 @@ export interface ScreenshotsCommandJson {
 
 export type CliCommandJson =
   | InitSkillsCommandJson
+  | SearchReportsCommandJson
+  | PrepareReportCommandJson
   | FailuresCommandJson
   | SummaryCommandJson
   | SlowStepsCommandJson
@@ -100,6 +119,26 @@ export function createInitSkillsCommandJson(skillPath: string): InitSkillsComman
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'init-skills',
     skillPath,
+  };
+}
+
+export function createSearchReportsCommandJson(reports: HubReportDescriptor[]): SearchReportsCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'search-reports',
+    totalCount: reports.length,
+    reports,
+  };
+}
+
+export function createPrepareReportCommandJson(report: HubReportDescriptor, mode: string): PrepareReportCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'prepare-report',
+    mode,
+    report,
+    reportRootPath: report.reportRootPath,
+    reportDataPath: report.reportDataPath,
   };
 }
 

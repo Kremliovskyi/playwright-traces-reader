@@ -7,6 +7,7 @@ import type {
   TraceSummary,
 } from '../index';
 import type { FailureListItem } from './json';
+import type { HubReportDescriptor } from './helpers';
 
 export type OutputFormat = 'text' | 'json';
 
@@ -21,6 +22,30 @@ export function emitOutput(io: { stdout: (text: string) => void }, format: Outpu
 
 export function formatInitSkillsText(skillPath: string): string {
   return `Skill scaffolded at ${skillPath}`;
+}
+
+export function formatSearchReportsText(reports: HubReportDescriptor[]): string {
+  if (reports.length === 0) return 'No reports matched the search.';
+
+  return reports.map((report, index) => {
+    return [
+      `${index + 1}. ${report.createdAt} [${report.scope}] ${report.id}`,
+      `   Metadata: ${report.metadata || '-'}`,
+      `   Report ref: ${report.reportRef}`,
+      `   Report root: ${report.reportRootPath || '-'}`,
+      `   Data dir: ${report.reportDataPath || '-'}`,
+    ].join('\n');
+  }).join('\n\n');
+}
+
+export function formatPrepareReportText(report: HubReportDescriptor, mode: string): string {
+  return [
+    `Prepared ${report.id} [${report.scope}]`,
+    `Mode: ${mode}`,
+    `Report ref: ${report.reportRef}`,
+    `Report root: ${report.reportRootPath || '-'}`,
+    `Data dir: ${report.reportDataPath || '-'}`,
+  ].join('\n');
 }
 
 export function formatFailuresText(failures: FailureListItem[]): string {

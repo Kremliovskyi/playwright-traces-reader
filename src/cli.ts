@@ -12,12 +12,17 @@ import {
 import { getFailedTraceSelections } from './extractors';
 import {
   copySkillTemplate,
+  DEFAULT_REPORTS_HUB_BASE_URL,
   loadReportMetadataForTrace,
   parsePositiveInteger,
+  prepareReportViaHub,
   resolveReportDataDir,
+  searchReportsViaHub,
 } from './cli/helpers';
 import {
   emitOutput,
+  formatPrepareReportText,
+  formatSearchReportsText,
   formatDomSnapshotsText,
   formatFailuresText,
   formatInitSkillsText,
@@ -31,6 +36,8 @@ import {
 } from './cli/formatters';
 import {
   createInitSkillsCommandJson,
+  createPrepareReportCommandJson,
+  createSearchReportsCommandJson,
   createDomCommandJson,
   createFailuresCommandJson,
   createNetworkCommandJson,
@@ -77,6 +84,69 @@ function buildProgram(io: CliIo): Command {
     .action(async (targetDir: string | undefined, options: { format: OutputFormat }) => {
       const destPath = await copySkillTemplate(targetDir ?? process.cwd());
       emitOutput(io, options.format, createInitSkillsCommandJson(destPath), formatInitSkillsText(destPath));
+    });
+
+  program
+    .command('search-reports [query]')
+    .description('Search Playwright reports through a local playwright-reports hub and return report references plus local artifact paths')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('--latest', 'Prefer the newest matching report', false)
+    .option('--scope <scope>', 'Filter by scope: current or archive')
+    .option('--range-start <date>', 'Start date filter (YYYY-MM-DD)')
+    .option('--range-end <date>', 'End date filter (YYYY-MM-DD)')
+    .option('--selected-dates <dates>', 'Comma-separated specific dates (YYYY-MM-DD,YYYY-MM-DD)')
+    .option('-n, --limit <count>', 'Maximum number of reports to return', parsePositiveInteger)
+    .option('--base-url <url>', 'Base URL for the playwright-reports hub', DEFAULT_REPORTS_HUB_BASE_URL)
+    .action(async (
+      query: string | undefined,
+      options: {
+        format: OutputFormat;
+        latest: boolean;
+        scope?: 'current' | 'archive';
+        rangeStart?: string;
+        rangeEnd?: string;
+        selectedDates?: string;
+        limit?: number;
+        baseUrl: string;
+      },
+    ) => {
+      if (options.scope && !['current', 'archive'].includes(options.scope)) {
+        throw new Error(`Invalid scope: ${options.scope}. Expected current or archive.`);
+      }
+
+      const selectedDates = options.selectedDates
+        ? options.selectedDates.split(',').map(value => value.trim()).filter(Boolean)
+        : undefined;
+      const searchOptions: Parameters<typeof searchReportsViaHub>[0] = {
+        baseUrl: options.baseUrl,
+      };
+
+      if (query !== undefined) searchOptions.query = query;
+      if (options.latest) searchOptions.latest = true;
+      if (options.scope !== undefined) searchOptions.scope = options.scope;
+      if (options.rangeStart !== undefined) searchOptions.rangeStart = options.rangeStart;
+      if (options.rangeEnd !== undefined) searchOptions.rangeEnd = options.rangeEnd;
+      if (selectedDates !== undefined) searchOptions.selectedDates = selectedDates;
+      if (options.limit !== undefined) searchOptions.limit = options.limit;
+
+      const response = await searchReportsViaHub(searchOptions);
+
+      emitOutput(io, options.format, createSearchReportsCommandJson(response.reports), formatSearchReportsText(response.reports));
+    });
+
+  program
+    .command('prepare-report <reportRef>')
+    .description('Resolve a report reference from playwright-reports into a local analysis-ready path descriptor')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('--base-url <url>', 'Base URL for the playwright-reports hub', DEFAULT_REPORTS_HUB_BASE_URL)
+    .action(async (reportRef: string, options: { format: OutputFormat; baseUrl: string }) => {
+      const response = await prepareReportViaHub(options.baseUrl, reportRef);
+      emitOutput(
+        io,
+        options.format,
+        createPrepareReportCommandJson(response.report, response.mode),
+        formatPrepareReportText(response.report, response.mode),
+      );
     });
 
   program

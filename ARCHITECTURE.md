@@ -18,7 +18,9 @@ This document describes the current architecture of `playwright-traces-reader` a
 - high-level extraction and summarization APIs over those artifacts
 - a local CLI for humans, agents, and automation
 
-It does not own report inventory, report search, remote storage access, or historical report catalog behavior. Those concerns belong outside this package.
+It does not own report inventory, metadata persistence, remote storage access, or historical report catalog behavior. Those concerns belong outside this package.
+
+It can, however, query an external local `playwright-reports` hub for thin discovery and preparation steps before parsing begins. That does not make this package the source of truth for report search; it remains a consumer of that external catalog.
 
 ## Supported Inputs
 
@@ -65,7 +67,7 @@ src/
   index.ts              public exports
   cli.ts                command-line entry point
   cli/
-    helpers.ts          CLI path resolution and shared helpers
+    helpers.ts          CLI path resolution, report-hub helpers, and shared utilities
     formatters.ts       human-readable text output formatters
     json.ts             versioned JSON command envelopes
 templates/
@@ -157,6 +159,8 @@ The CLI is now a real analysis interface, not just a scaffolding helper.
 
 Command surface:
 
+- `search-reports [query]`
+- `prepare-report <reportRef>`
 - `init-skills [targetDir]`
 - `failures <reportPath>`
 - `summary <tracePath>`
@@ -174,15 +178,37 @@ Output modes:
 
 Supporting pieces:
 
-- `helpers.ts` resolves report/data paths, loads report metadata for trace commands, validates integers, and scaffolds the skill.
+- `helpers.ts` resolves report/data paths, loads report metadata for trace commands, validates integers, talks to the local report hub for `search-reports` and `prepare-report`, and scaffolds the skill.
 - `formatters.ts` contains the text renderers so command handlers remain thin.
 - `json.ts` defines stable versioned JSON envelopes for each command.
 
 Current CLI contract choices:
 
 - JSON is the default output mode for all commands.
+- `search-reports` and `prepare-report` are discovery commands that stop at local path resolution.
 - `failures` is intentionally compact and returns CLI-specific triage records.
 - `summary` remains the full deep-inspection payload for one trace.
+
+### Report-hub discovery flow
+
+The new discovery commands create a thin integration layer with `playwright-reports`:
+
+```text
+metadata/date/recency query
+  -> search-reports
+  -> local playwright-reports hub
+  -> reportRef
+  -> prepare-report
+  -> reportRootPath/reportDataPath
+  -> failures/summary/network/dom/timeline
+```
+
+Important boundary rules:
+
+- The hub owns search semantics such as metadata matching and date filtering.
+- This package treats `reportRef` as opaque.
+- After `prepare-report`, all subsequent analysis goes back to purely local artifact parsing.
+- If the hub is unavailable, the CLI fails fast with an explicit unreachable-hub message.
 
 ## Current Command Flow
 
@@ -278,15 +304,27 @@ report root or report data dir
   -> optional CLI formatter or JSON envelope
 ```
 
+### Hub-assisted report analysis
+
+```text
+search-reports
+  -> external report hub search
+  -> prepare-report
+  -> local report root/data path
+  -> standard local parser commands
+```
+
 ## Design Constraints
 
 The current architecture follows these constraints:
 
 1. Keep parsing and extraction logic independent from command-line formatting.
-2. Keep CLI commands independent from external services and remote storage.
+2. Keep parsing and extraction logic independent from report inventory and search ownership.
 3. Keep report metadata handling optional so single-trace analysis still works without `index.html`.
 4. Keep test coverage self-contained so the package does not rely on external fixture repositories.
 5. Keep the public library usable independently of the CLI.
+
+The CLI may depend on an external local hub for discovery, but the parser and library layers do not.
 
 ## Relationship To Future Hub Work
 
@@ -295,7 +333,7 @@ Today, `playwright-traces-reader` is a local parser and analysis tool.
 The future role described in [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md) stays the same:
 
 - this package remains the parsing and CLI engine
-- `playwright-reports` can import it in-process for historical workflows
+- `playwright-reports` remains the report hub for search and resolution
 - remote resolution and materialization stay outside this package
 
 That means the current implementation already matches the intended boundary: local artifacts in, structured analysis out.

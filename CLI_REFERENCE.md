@@ -22,6 +22,8 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | Command | Scope | Purpose |
 |---|---|---|
 | `init-skills` | repo | Scaffold the Copilot skill |
+| `search-reports` | hub | Search reports through a local playwright-reports hub |
+| `prepare-report` | hub | Resolve one hub report reference into a local path |
 | `failures` | report | Return unique failing tests across a report |
 | `summary` | trace | Return one complete summary for a single trace |
 | `slow-steps` | trace | Return the slowest steps for a single trace |
@@ -81,6 +83,52 @@ npx playwright-traces-reader init-skills
 npx playwright-traces-reader init-skills ../my-project
 npx playwright-traces-reader init-skills ../my-project --format text
 ```
+
+## `search-reports`
+
+Searches reports through a local `playwright-reports` hub.
+
+Usage:
+
+```bash
+npx playwright-traces-reader search-reports [query] [--latest] [--scope current|archive] [--range-start <date>] [--range-end <date>] [--selected-dates <dates>] [--limit <count>] [--base-url <url>] [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader search-reports "UAT EU" --latest
+npx playwright-traces-reader search-reports smoke --scope archive --limit 5 --format text
+```
+
+Behavior:
+
+- uses the local hub search contract
+- returns a stable `reportRef` plus local artifact paths when available
+- does not parse traces by itself
+
+## `prepare-report`
+
+Resolves one `reportRef` from the hub into a local analysis-ready path descriptor.
+
+Usage:
+
+```bash
+npx playwright-traces-reader prepare-report <reportRef> [--base-url <url>] [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader prepare-report <reportRef>
+npx playwright-traces-reader prepare-report <reportRef> --format text
+```
+
+Behavior:
+
+- resolves one selected report through the hub
+- returns local `reportRootPath` and `reportDataPath` when available
+- intended to be followed by traditional parser commands like `failures`, `summary`, `network`, `dom`, or `timeline`
 
 ## `failures`
 
