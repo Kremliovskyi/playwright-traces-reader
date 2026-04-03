@@ -15,6 +15,13 @@ Use this skill when the user asks to analyze Playwright reports or traces.
 - JSON is the default output mode. Use `--format text` only when a human-readable terminal summary is preferable.
 - Use screenshots only for human visual inspection. For agent-readable UI state, prefer `dom` and `summary`.
 
+## Output Handling
+
+- Do not truncate `npx playwright-traces-reader failures ...` output on the first attempt with `Select-Object`, `head`, or similar shell filtering.
+- `failures` is the compact triage command and should normally be consumed in full.
+- After reading `failures`, choose one item and use `summary <tracePath>` for full details.
+- For potentially larger commands such as `network`, `dom`, or `timeline`, narrowing output is acceptable when needed.
+
 ## Prerequisites
 
 Install the package locally in the repository:
