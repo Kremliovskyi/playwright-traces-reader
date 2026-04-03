@@ -3,13 +3,13 @@ import { Command, CommanderError, InvalidArgumentError } from 'commander';
 import {
   extractScreenshots,
   getDomSnapshots,
-  getFailedTestSummaries,
   getNetworkTraffic,
   getSummary,
   getTestSteps,
   getTimeline,
   prepareTraceDir,
 } from './index';
+import { getFailedTraceSelections } from './extractors';
 import {
   copySkillTemplate,
   loadReportMetadataForTrace,
@@ -20,6 +20,7 @@ import {
   emitOutput,
   formatDomSnapshotsText,
   formatFailuresText,
+  formatInitSkillsText,
   formatNetworkText,
   formatScreenshotsText,
   formatSlowStepsText,
@@ -29,6 +30,7 @@ import {
   type OutputFormat,
 } from './cli/formatters';
 import {
+  createInitSkillsCommandJson,
   createDomCommandJson,
   createFailuresCommandJson,
   createNetworkCommandJson,
@@ -39,6 +41,7 @@ import {
   createTimelineCommandJson,
 } from './cli/json';
 import type { DomSnapshotOptions } from './index';
+import type { FailureListItem } from './cli/json';
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -70,29 +73,49 @@ function buildProgram(io: CliIo): Command {
   program
     .command('init-skills [targetDir]')
     .description('Scaffold the analyze-playwright-traces skill into a target repository')
-    .action(async (targetDir?: string) => {
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .action(async (targetDir: string | undefined, options: { format: OutputFormat }) => {
       const destPath = await copySkillTemplate(targetDir ?? process.cwd());
-      io.stdout(`Skill scaffolded at ${destPath}\n`);
+      emitOutput(io, options.format, createInitSkillsCommandJson(destPath), formatInitSkillsText(destPath));
     });
 
   program
     .command('failures <reportPath>')
     .description('Analyze unique failing tests in a Playwright report root or data directory')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--exclude-skipped', 'Exclude skipped tests from the result set', false)
     .action(async (reportPath: string, options: { format: OutputFormat; excludeSkipped: boolean }) => {
       const reportDataDir = await resolveReportDataDir(reportPath);
-      const summaries = await getFailedTestSummaries(reportDataDir, {
+      const selections = await getFailedTraceSelections(reportDataDir, {
         excludeSkipped: options.excludeSkipped,
       });
 
-      emitOutput(io, options.format, createFailuresCommandJson(summaries), formatFailuresText(summaries));
+      const failures: FailureListItem[] = selections.map(selection => {
+        const errorMessage = firstLine(selection.summary.error?.message);
+        const networkErrorCount = selection.summary.networkCalls.filter(entry => entry.status >= 400).length;
+
+        return {
+          testTitle: selection.summary.testTitle,
+          title: selection.summary.title,
+          status: selection.summary.status,
+          outcome: selection.summary.outcome,
+          durationMs: selection.summary.durationMs,
+          errorMessage,
+          tracePath: selection.tracePath,
+          traceSha1: selection.traceSha1,
+          networkCallCount: selection.summary.networkCalls.length,
+          networkErrorCount,
+          hasFailureDomSnapshot: selection.summary.failureDomSnapshot !== null,
+        };
+      });
+
+      emitOutput(io, options.format, createFailuresCommandJson(failures), formatFailuresText(failures));
     });
 
   program
     .command('summary <tracePath>')
     .description('Summarize a single trace directory or trace zip')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--report <reportPath>', 'Optional report root or data directory used to load report metadata')
     .action(async (tracePath: string, options: { format: OutputFormat; report?: string }) => {
       const traceContext = await prepareTraceDir(tracePath);
@@ -105,7 +128,7 @@ function buildProgram(io: CliIo): Command {
   program
     .command('slow-steps <tracePath>')
     .description('Show the slowest steps for a single trace')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('-n, --limit <count>', 'Maximum number of steps to return', parsePositiveInteger, 5)
     .option('--report <reportPath>', 'Optional report root or data directory used to load report metadata')
     .action(async (tracePath: string, options: { format: OutputFormat; limit: number; report?: string }) => {
@@ -120,7 +143,7 @@ function buildProgram(io: CliIo): Command {
   program
     .command('steps <tracePath>')
     .description('Print the reconstructed test step tree for a single trace')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .action(async (tracePath: string, options: { format: OutputFormat }) => {
       const traceContext = await prepareTraceDir(tracePath);
       const steps = await getTestSteps(traceContext);
@@ -131,7 +154,7 @@ function buildProgram(io: CliIo): Command {
   program
     .command('network <tracePath>')
     .description('Inspect network traffic for a single trace')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--source <source>', 'Filter by source: all, api, or browser', 'all')
     .action(async (tracePath: string, options: { format: OutputFormat; source: string }) => {
       if (!['all', 'api', 'browser'].includes(options.source)) {
@@ -150,7 +173,7 @@ function buildProgram(io: CliIo): Command {
   program
     .command('dom <tracePath>')
     .description('Inspect DOM snapshots for a single trace')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--near <near>', 'Return snapshots near a callId, or use "last"')
     .option('--phase <phase>', 'Filter to before, action, or after phase')
     .option('-n, --limit <count>', 'Maximum number of action snapshots to return', parsePositiveInteger)
@@ -176,7 +199,7 @@ function buildProgram(io: CliIo): Command {
   program
     .command('timeline <tracePath>')
     .description('Print a merged chronological timeline for a single trace')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .action(async (tracePath: string, options: { format: OutputFormat }) => {
       const traceContext = await prepareTraceDir(tracePath);
       const timeline = await getTimeline(traceContext);
@@ -188,7 +211,7 @@ function buildProgram(io: CliIo): Command {
     .command('screenshots <tracePath>')
     .description('Extract screenshots from a trace to a local output directory')
     .requiredOption('-o, --out-dir <path>', 'Directory to write extracted screenshots into')
-    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .action(async (tracePath: string, options: { format: OutputFormat; outDir: string }) => {
       const traceContext = await prepareTraceDir(tracePath);
       const screenshots = await extractScreenshots(traceContext, options.outDir);
@@ -197,6 +220,11 @@ function buildProgram(io: CliIo): Command {
     });
 
   return program;
+}
+
+function firstLine(value?: string | null): string | null {
+  if (!value) return null;
+  return value.split(/\r?\n/, 1)[0] ?? null;
 }
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<number> {

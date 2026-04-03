@@ -9,11 +9,31 @@ import type {
 
 export const CLI_JSON_SCHEMA_VERSION = 1 as const;
 
+export interface FailureListItem {
+  testTitle: string | null;
+  title: string;
+  status: 'passed' | 'failed';
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+  durationMs: number | null;
+  errorMessage: string | null;
+  tracePath: string;
+  traceSha1: string;
+  networkCallCount: number;
+  networkErrorCount: number;
+  hasFailureDomSnapshot: boolean;
+}
+
+export interface InitSkillsCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'init-skills';
+  skillPath: string;
+}
+
 export interface FailuresCommandJson {
   schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   command: 'failures';
   count: number;
-  failures: TraceSummary[];
+  failures: FailureListItem[];
 }
 
 export interface SummaryCommandJson {
@@ -65,6 +85,7 @@ export interface ScreenshotsCommandJson {
 }
 
 export type CliCommandJson =
+  | InitSkillsCommandJson
   | FailuresCommandJson
   | SummaryCommandJson
   | SlowStepsCommandJson
@@ -74,7 +95,15 @@ export type CliCommandJson =
   | TimelineCommandJson
   | ScreenshotsCommandJson;
 
-export function createFailuresCommandJson(failures: TraceSummary[]): FailuresCommandJson {
+export function createInitSkillsCommandJson(skillPath: string): InitSkillsCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'init-skills',
+    skillPath,
+  };
+}
+
+export function createFailuresCommandJson(failures: FailureListItem[]): FailuresCommandJson {
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'failures',

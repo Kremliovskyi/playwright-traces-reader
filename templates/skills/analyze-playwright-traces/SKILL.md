@@ -12,7 +12,7 @@ Use this skill when the user asks to analyze Playwright reports or traces.
 - Use only supported `npx playwright-traces-reader ...` CLI commands.
 - Do not generate temporary `.mjs`, `.js`, or `.ts` analysis scripts.
 - Do not import parser methods directly when a CLI command covers the workflow.
-- Prefer `--format json` when the output needs to be consumed by the agent or follow-up tooling.
+- JSON is the default output mode. Use `--format text` only when a human-readable terminal summary is preferable.
 - Use screenshots only for human visual inspection. For agent-readable UI state, prefer `dom` and `summary`.
 
 ## Prerequisites
@@ -37,33 +37,34 @@ Supported local inputs:
 Use `failures` when the user wants all unique failing tests in a report.
 
 ```bash
-npx playwright-traces-reader failures /path/to/playwright-report --format json
+npx playwright-traces-reader failures /path/to/playwright-report
 ```
 
 Use `--exclude-skipped` to omit skipped tests:
 
 ```bash
-npx playwright-traces-reader failures /path/to/playwright-report/data --exclude-skipped --format json
+npx playwright-traces-reader failures /path/to/playwright-report/data --exclude-skipped
 ```
 
 What it returns:
 
 - unique failing tests only
 - retries already deduplicated
-- structured failure summaries with steps, network calls, and failure DOM state
+- compact triage records with `tracePath` and `traceSha1`
+- enough information to follow up with `summary <tracePath>` for one selected failure
 
 ### Single-trace summary
 
 Use `summary` when the user wants one complete summary for a specific trace.
 
 ```bash
-npx playwright-traces-reader summary /path/to/playwright-report/data/<sha1> --format json
+npx playwright-traces-reader summary /path/to/playwright-report/data/<sha1>
 ```
 
 If report metadata should be loaded explicitly, pass `--report`:
 
 ```bash
-npx playwright-traces-reader summary /path/to/playwright-report/data/<sha1> --report /path/to/playwright-report --format json
+npx playwright-traces-reader summary /path/to/playwright-report/data/<sha1> --report /path/to/playwright-report
 ```
 
 Important behavior:
@@ -77,7 +78,7 @@ Important behavior:
 Use `slow-steps` to inspect the slowest steps in one trace.
 
 ```bash
-npx playwright-traces-reader slow-steps /path/to/playwright-report/data/<sha1> --limit 5 --format json
+npx playwright-traces-reader slow-steps /path/to/playwright-report/data/<sha1> --limit 5
 ```
 
 ### Step tree
@@ -93,7 +94,7 @@ npx playwright-traces-reader steps /path/to/playwright-report/data/<sha1>
 Use `network` to inspect API and browser traffic for one trace.
 
 ```bash
-npx playwright-traces-reader network /path/to/playwright-report/data/<sha1> --source all --format json
+npx playwright-traces-reader network /path/to/playwright-report/data/<sha1> --source all
 ```
 
 Source filters:
@@ -107,7 +108,7 @@ Source filters:
 Use `dom` to inspect UI state before, during, or after actions.
 
 ```bash
-npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --near last --limit 3 --format json
+npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --near last --limit 3
 ```
 
 Useful filters:
@@ -122,7 +123,7 @@ Useful filters:
 Use `timeline` to build a merged chronological trace narrative.
 
 ```bash
-npx playwright-traces-reader timeline /path/to/playwright-report/data/<sha1> --format json
+npx playwright-traces-reader timeline /path/to/playwright-report/data/<sha1>
 ```
 
 ### Screenshots
@@ -130,7 +131,7 @@ npx playwright-traces-reader timeline /path/to/playwright-report/data/<sha1> --f
 Use `screenshots` only when a human needs extracted image files.
 
 ```bash
-npx playwright-traces-reader screenshots /path/to/playwright-report/data/<sha1> --out-dir /tmp/pw-screenshots --format json
+npx playwright-traces-reader screenshots /path/to/playwright-report/data/<sha1> --out-dir /tmp/pw-screenshots
 ```
 
 ### Skill scaffold
@@ -145,8 +146,8 @@ npx playwright-traces-reader init-skills
 
 1. Identify whether the task is report-level or single-trace.
 2. Choose the narrowest CLI command that answers the question.
-3. Prefer `--format json` for agent reasoning or follow-up processing.
-4. Use text output when the user wants a direct terminal-style summary.
+3. Use the default JSON output for agent reasoning or follow-up processing.
+4. Use `--format text` when the user wants a direct terminal-style summary.
 5. Do not fall back to library APIs unless the requested workflow is not covered by a supported command.
 
 ## Output Guidance

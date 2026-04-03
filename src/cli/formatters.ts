@@ -6,6 +6,7 @@ import type {
   TimelineEntry,
   TraceSummary,
 } from '../index';
+import type { FailureListItem } from './json';
 
 export type OutputFormat = 'text' | 'json';
 
@@ -18,23 +19,25 @@ export function emitOutput(io: { stdout: (text: string) => void }, format: Outpu
   io.stdout(`${text}\n`);
 }
 
-export function formatFailuresText(summaries: TraceSummary[]): string {
-  if (summaries.length === 0) return 'No failing tests found.';
+export function formatInitSkillsText(skillPath: string): string {
+  return `Skill scaffolded at ${skillPath}`;
+}
 
-  return summaries.map((summary, index) => {
-    const title = summary.testTitle ?? summary.title;
-    const errorLine = firstLine(summary.error?.message) ?? 'No error message available';
-    const failedNetworkCount = summary.networkCalls.filter(entry => entry.status >= 400).length;
-    const slowSteps = summary.slowestSteps.slice(0, 3)
-      .map(step => `${step.durationMs ?? 0}ms ${step.title}`)
-      .join(' | ');
+export function formatFailuresText(failures: FailureListItem[]): string {
+  if (failures.length === 0) return 'No failing tests found.';
+
+  return failures.map((failure, index) => {
+    const title = failure.testTitle ?? failure.title;
+    const errorLine = failure.errorMessage ?? 'No error message available';
 
     return [
-      `${index + 1}. [${summary.outcome ?? summary.status}] ${title}`,
-      `   Duration: ${formatDuration(summary.durationMs)}`,
+      `${index + 1}. [${failure.outcome ?? failure.status}] ${title}`,
+      `   Duration: ${formatDuration(failure.durationMs)}`,
       `   Error: ${errorLine}`,
-      `   Network: ${summary.networkCalls.length} calls (${failedNetworkCount} errors)`,
-      `   Slowest: ${slowSteps || 'n/a'}`,
+      `   Trace SHA1: ${failure.traceSha1}`,
+      `   Trace path: ${failure.tracePath}`,
+      `   Network: ${failure.networkCallCount} calls (${failure.networkErrorCount} errors)`,
+      `   Failure DOM snapshot: ${failure.hasFailureDomSnapshot ? 'yes' : 'no'}`,
     ].join('\n');
   }).join('\n\n');
 }

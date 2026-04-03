@@ -33,7 +33,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('failures command returns deduplicated report-level JSON summaries', async () => {
-    const result = await execCli(['failures', fixture.rootDir, '--format', 'json']);
+    const result = await execCli(['failures', fixture.rootDir]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
@@ -46,10 +46,13 @@ describe('playwright-traces-reader CLI', () => {
     expect(failures.some(entry => entry.outcome === 'unexpected')).toBe(true);
     expect(failures.some(entry => entry.outcome === 'skipped')).toBe(true);
     expect(failures.some(entry => entry.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
+    expect(failures[0]).toHaveProperty('tracePath');
+    expect(failures[0]).toHaveProperty('traceSha1');
+    expect(failures[0]).not.toHaveProperty('topLevelSteps');
   });
 
   test('failures command respects exclude-skipped', async () => {
-    const result = await execCli(['failures', fixture.rootDir, '--exclude-skipped', '--format', 'json']);
+    const result = await execCli(['failures', fixture.rootDir, '--exclude-skipped']);
 
     expect(result.exitCode).toBe(0);
 
@@ -62,15 +65,29 @@ describe('playwright-traces-reader CLI', () => {
     expect(failures[0]!.title).toBe(fixture.traces.failedLatest.rootTitle);
   });
 
+  test('failures output can be chained into summary using tracePath', async () => {
+    const failuresResult = await execCli(['failures', fixture.rootDir, '--exclude-skipped']);
+
+    expect(failuresResult.exitCode).toBe(0);
+
+    const failuresPayload = JSON.parse(failuresResult.stdout) as {
+      failures: Array<{ tracePath: string; traceSha1: string; title: string }>;
+    };
+    const selectedFailure = failuresPayload.failures[0]!;
+
+    expect(selectedFailure.traceSha1).toBe(fixture.traces.failedLatest.sha1);
+
+    const summaryResult = await execCli(['summary', selectedFailure.tracePath, '--report', fixture.rootDir]);
+
+    expect(summaryResult.exitCode).toBe(0);
+
+    const summaryPayload = JSON.parse(summaryResult.stdout) as { summary: { title: string; status: string } };
+    expect(summaryPayload.summary.title).toBe(selectedFailure.title);
+    expect(summaryPayload.summary.status).toBe('failed');
+  });
+
   test('summary command returns a failed trace summary as JSON', async () => {
-    const result = await execCli([
-      'summary',
-      fixture.traces.failedLatest.tracePath,
-      '--report',
-      fixture.rootDir,
-      '--format',
-      'json',
-    ]);
+    const result = await execCli(['summary', fixture.traces.failedLatest.tracePath, '--report', fixture.rootDir]);
 
     expect(result.exitCode).toBe(0);
 
@@ -86,14 +103,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('summary command works for a passed trace', async () => {
-    const result = await execCli([
-      'summary',
-      fixture.traces.passed.tracePath,
-      '--report',
-      fixture.rootDir,
-      '--format',
-      'json',
-    ]);
+    const result = await execCli(['summary', fixture.traces.passed.tracePath, '--report', fixture.rootDir]);
 
     expect(result.exitCode).toBe(0);
 
@@ -108,16 +118,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('slow-steps command returns a bounded JSON payload', async () => {
-    const result = await execCli([
-      'slow-steps',
-      fixture.traces.failedLatest.tracePath,
-      '--report',
-      fixture.rootDir,
-      '--limit',
-      '1',
-      '--format',
-      'json',
-    ]);
+    const result = await execCli(['slow-steps', fixture.traces.failedLatest.tracePath, '--report', fixture.rootDir, '--limit', '1']);
 
     expect(result.exitCode).toBe(0);
 
@@ -129,8 +130,20 @@ describe('playwright-traces-reader CLI', () => {
     expect(steps[0]).toHaveProperty('title');
   });
 
-  test('steps command prints a text tree', async () => {
+  test('steps command returns JSON by default', async () => {
     const result = await execCli(['steps', fixture.traces.failedLatest.tracePath]);
+
+    expect(result.exitCode).toBe(0);
+
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(payload.schemaVersion).toBe(1);
+    expect(payload.command).toBe('steps');
+    const steps = payload.steps as Array<Record<string, unknown>>;
+    expect(steps.some(step => step.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
+  });
+
+  test('steps command still supports text output explicitly', async () => {
+    const result = await execCli(['steps', fixture.traces.failedLatest.tracePath, '--format', 'text']);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(fixture.traces.failedLatest.rootTitle);
@@ -138,7 +151,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('network command filters by source in JSON mode', async () => {
-    const result = await execCli(['network', fixture.traces.failedLatest.tracePath, '--source', 'api', '--format', 'json']);
+    const result = await execCli(['network', fixture.traces.failedLatest.tracePath, '--source', 'api']);
 
     expect(result.exitCode).toBe(0);
 
@@ -152,16 +165,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('dom command returns filtered JSON snapshots', async () => {
-    const result = await execCli([
-      'dom',
-      fixture.traces.failedLatest.tracePath,
-      '--near',
-      'last',
-      '--limit',
-      '2',
-      '--format',
-      'json',
-    ]);
+    const result = await execCli(['dom', fixture.traces.failedLatest.tracePath, '--near', 'last', '--limit', '2']);
 
     expect(result.exitCode).toBe(0);
 
@@ -174,7 +178,7 @@ describe('playwright-traces-reader CLI', () => {
   });
 
   test('timeline command returns merged JSON entries', async () => {
-    const result = await execCli(['timeline', fixture.traces.failedLatest.tracePath, '--format', 'json']);
+    const result = await execCli(['timeline', fixture.traces.failedLatest.tracePath]);
 
     expect(result.exitCode).toBe(0);
 
@@ -197,8 +201,6 @@ describe('playwright-traces-reader CLI', () => {
         fixture.traces.failedLatest.tracePath,
         '--out-dir',
         outDir,
-        '--format',
-        'json',
       ]);
 
       expect(result.exitCode).toBe(0);
@@ -214,13 +216,17 @@ describe('playwright-traces-reader CLI', () => {
     }
   });
 
-  test('init-skills scaffolds the skill into the target repository', async () => {
+  test('init-skills returns JSON by default and scaffolds the skill into the target repository', async () => {
     const tmpDir = path.join(os.tmpdir(), 'pw-traces-reader-cli-skill', Date.now().toString());
 
     try {
       const result = await execCli(['init-skills', tmpDir]);
 
       expect(result.exitCode).toBe(0);
+      const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(payload.schemaVersion).toBe(1);
+      expect(payload.command).toBe('init-skills');
+      expect(payload.skillPath).toBe(path.join(tmpDir, '.github', 'skills', 'analyze-playwright-traces', 'SKILL.md'));
       expect(fs.existsSync(path.join(tmpDir, '.github', 'skills', 'analyze-playwright-traces', 'SKILL.md'))).toBe(true);
     } finally {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });

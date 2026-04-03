@@ -133,6 +133,7 @@ This layer composes several extractors into higher-level workflows.
 Main APIs:
 
 - `getSummary(ctx, options)` builds one `TraceSummary` for a single trace.
+- `getFailedTraceSelections(reportDataDir, options?)` selects the winning failed traces and pairs them with trace identity metadata.
 - `getFailedTestSummaries(reportDataDir, options?)` performs report-level failure analysis and retry deduplication.
 
 Important current behavior:
@@ -144,6 +145,7 @@ Important current behavior:
 - `getFailedTestSummaries()` uses `getTopLevelFailures()` as a cheap pre-filter before building full summaries.
 - `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
 - `getFailedTestSummaries()` keeps the last retry by comparing the latest root-step end time.
+- `getFailedTraceSelections()` reuses the same retry-selection logic but returns both the selected trace identity (`tracePath`, `traceSha1`) and the rich `TraceSummary`.
 
 This is the main library interface for consumers that need analysis rather than raw events.
 
@@ -167,14 +169,20 @@ Command surface:
 
 Output modes:
 
-- `--format text` for terminal-oriented output
-- `--format json` for machine-readable output
+- JSON is the default output mode for CLI commands
+- `--format text` remains available for terminal-oriented output
 
 Supporting pieces:
 
 - `helpers.ts` resolves report/data paths, loads report metadata for trace commands, validates integers, and scaffolds the skill.
 - `formatters.ts` contains the text renderers so command handlers remain thin.
 - `json.ts` defines stable versioned JSON envelopes for each command.
+
+Current CLI contract choices:
+
+- JSON is the default output mode for all commands.
+- `failures` is intentionally compact and returns CLI-specific triage records.
+- `summary` remains the full deep-inspection payload for one trace.
 
 ## Current Command Flow
 
@@ -196,6 +204,8 @@ All command JSON payloads currently include:
 - `schemaVersion`
 - `command`
 - a command-specific payload such as `summary`, `failures`, `entries`, `steps`, `snapshots`, or `screenshots`
+
+The `failures` command is intentionally compact at the CLI layer. It no longer returns full `TraceSummary` objects. Instead, it returns triage records with enough data to select one failure and call `summary <tracePath>` for full detail.
 
 This contract is documented separately in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md), but architecturally it matters because it creates a stable boundary for:
 
@@ -259,11 +269,12 @@ trace dir or trace zip
 ```text
 report root or report data dir
   -> resolveReportDataDir
+  -> getFailedTraceSelections
   -> listTraces
   -> getTopLevelFailures per trace
   -> retry grouping and skip filtering
   -> getSummary for winning traces only
-  -> TraceSummary[]
+  -> compact failure records with tracePath and traceSha1
   -> optional CLI formatter or JSON envelope
 ```
 
@@ -295,7 +306,7 @@ The current architecture is:
 
 - a low-level artifact access layer
 - a high-level extraction and summary layer
-- a real local CLI with text and JSON outputs
+- a real local CLI with JSON-default output and optional text mode
 - a CLI-first skill scaffold for agents
 - a self-contained synthetic test harness
 

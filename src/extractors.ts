@@ -960,6 +960,75 @@ export interface GetFailedTestSummariesOptions {
   excludeSkipped?: boolean;
 }
 
+export interface FailedTraceSelection {
+  tracePath: string;
+  traceSha1: string;
+  summary: TraceSummary;
+}
+
+export async function getFailedTraceSelections(
+  reportDataDir: string,
+  options?: GetFailedTestSummariesOptions,
+): Promise<FailedTraceSelection[]> {
+  const traces = await listTraces(reportDataDir);
+
+  const meta = await getReportMetadata(reportDataDir);
+  const traceMaps = meta ? buildReportTraceMaps(meta) : null;
+  const outcomeByTraceSha1 = traceMaps?.outcomeByTraceSha1 ?? null;
+  const testIdByTraceSha1 = traceMaps?.testIdByTraceSha1 ?? null;
+
+  type CtxMeta = { ctx: TraceContext; latestEndTime: number };
+  const byKey = new Map<string, CtxMeta>();
+
+  for (const ctx of traces) {
+    const topFailures = await getTopLevelFailures(ctx);
+    if (topFailures.length === 0) continue;
+
+    const sha1 = path.basename(ctx.traceDir);
+    const outcome = outcomeByTraceSha1?.get(sha1) ?? null;
+
+    if (options?.excludeSkipped) {
+      let isSkipped = false;
+
+      if (outcomeByTraceSha1) {
+        if (outcome === 'skipped') isSkipped = true;
+      } else {
+        isSkipped = topFailures.every(
+          f => f.annotations.some(a => a.type === 'skip') ||
+               f.error?.message?.includes('Test is skipped:'),
+        );
+      }
+
+      if (isSkipped) continue;
+    }
+
+    const testId = testIdByTraceSha1?.get(sha1);
+    const key = testId ?? (await getTestTitle(ctx)) ?? ctx.traceDir;
+
+    const latestEndTime = topFailures.reduce(
+      (max, s) => Math.max(max, s.endTime ?? s.startTime ?? 0),
+      0,
+    );
+
+    const existing = byKey.get(key);
+    if (!existing || latestEndTime > existing.latestEndTime) {
+      byKey.set(key, { ctx, latestEndTime });
+    }
+  }
+
+  const results: FailedTraceSelection[] = [];
+  for (const { ctx } of byKey.values()) {
+    const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
+    results.push({
+      tracePath: ctx.traceDir,
+      traceSha1: path.basename(ctx.traceDir),
+      summary,
+    });
+  }
+
+  return results;
+}
+
 /**
  * High-level report-level helper: finds all **unique** failing tests across
  * an entire Playwright report data directory and returns a `TraceSummary` for
@@ -989,74 +1058,7 @@ export interface GetFailedTestSummariesOptions {
  * @returns `TraceSummary[]` for each unique failing test (one per unique test).
  */
 export async function getFailedTestSummaries(reportDataDir: string, options?: GetFailedTestSummariesOptions): Promise<TraceSummary[]> {
-  const traces = await listTraces(reportDataDir);
-
-  // Always try to load report.json for:
-  // 1. Authoritative outcome data (skip detection + TraceSummary.outcome)
-  // 2. testId-based dedup (fixes null-title API traces having duplicate retries)
-  const meta = await getReportMetadata(reportDataDir);
-  const traceMaps = meta ? buildReportTraceMaps(meta) : null;
-  const outcomeByTraceSha1 = traceMaps?.outcomeByTraceSha1 ?? null;
-  const testIdByTraceSha1 = traceMaps?.testIdByTraceSha1 ?? null;
-
-  // --- Pass 1: group failing trace contexts by unique test key ---
-  // Multiple contexts with the same key are retries of the same test.
-  // We keep track of the latest end time seen for each key so we can
-  // select the last retry (the most recent execution) in Pass 2.
-  type CtxMeta = { ctx: TraceContext; latestEndTime: number };
-  const byKey = new Map<string, CtxMeta>();
-
-  for (const ctx of traces) {
-    // Cheap check — reads only test.trace. Skip passing tests immediately.
-    const topFailures = await getTopLevelFailures(ctx);
-    if (topFailures.length === 0) continue;
-
-    const sha1 = path.basename(ctx.traceDir);
-    const outcome = outcomeByTraceSha1?.get(sha1) ?? null;
-
-    // Exclude skipped tests when requested.
-    if (options?.excludeSkipped) {
-      let isSkipped = false;
-
-      if (outcomeByTraceSha1) {
-        if (outcome === 'skipped') isSkipped = true;
-      } else {
-        // Fallback heuristic when report.json is unavailable:
-        // check step annotations and error messages.
-        isSkipped = topFailures.every(
-          f => f.annotations.some(a => a.type === 'skip') ||
-               f.error?.message?.includes('Test is skipped:'),
-        );
-      }
-
-      if (isSkipped) continue;
-    }
-
-    // Dedup key: testId from report.json (works for all trace types including
-    // API-only), then getTestTitle, then traceDir as last resort.
-    const testId = testIdByTraceSha1?.get(sha1);
-    const key = testId ?? (await getTestTitle(ctx)) ?? ctx.traceDir;
-
-    // Use the latest endTime of any root step as the proxy for when this
-    // retry finished. Fall back to 0 if no step has an endTime.
-    const latestEndTime = topFailures.reduce(
-      (max, s) => Math.max(max, s.endTime ?? s.startTime ?? 0),
-      0,
-    );
-
-    const existing = byKey.get(key);
-    if (!existing || latestEndTime > existing.latestEndTime) {
-      byKey.set(key, { ctx, latestEndTime });
-    }
-  }
-
-  // --- Pass 2: build summaries only for the last retry of each unique failure ---
-  const results: TraceSummary[] = [];
-  for (const { ctx } of byKey.values()) {
-    const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
-    results.push(summary);
-  }
-
-  return results;
+  const selections = await getFailedTraceSelections(reportDataDir, options);
+  return selections.map(selection => selection.summary);
 }
 

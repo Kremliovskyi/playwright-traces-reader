@@ -33,7 +33,7 @@ The package exposes a local CLI. In a repository that has the package installed,
 ```bash
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
-npx playwright-traces-reader network ./playwright-report/data/<sha1> --format json
+npx playwright-traces-reader network ./playwright-report/data/<sha1>
 ```
 
 Phase 1 commands:
@@ -48,12 +48,26 @@ Phase 1 commands:
 - `timeline <tracePath>` — merged chronological trace timeline
 - `screenshots <tracePath> --out-dir <path>` — extract screenshots for human inspection
 
-Supported output modes in Phase 1:
+Default output mode in Phase 1:
 
-- `--format text` — human-readable terminal output
-- `--format json` — structured output for agents and automation
+- JSON is the default for CLI commands
+
+Optional output mode:
+
+- `--format text` — human-readable terminal output when explicitly requested
 
 JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
+
+`failures` is a compact triage command. It returns minimal report-level records, including `tracePath` and `traceSha1`, so the next step is to run `summary <tracePath>` for full trace details.
+
+Typical CLI workflow:
+
+```bash
+npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader summary /absolute/path/to/playwright-report/data/<sha1>
+```
+
+Use `--format text` only when you explicitly want terminal-oriented output instead of the default JSON response.
 
 ## GitHub Copilot Skill
 
@@ -67,6 +81,8 @@ npx @andrii_kremlovskyi/playwright-traces-reader init-skills ./my-project
 
 This copies a `SKILL.md` template to `.github/skills/analyze-playwright-traces/SKILL.md`. The skill is CLI-first and points Copilot to supported `npx playwright-traces-reader ...` commands instead of temporary script generation.
 
+Like the other CLI commands, `init-skills` now returns JSON by default and supports `--format text` when a human-readable confirmation message is preferred.
+
 ## Library Integration
 
 The preferred interface for agents and test repositories is the CLI.
@@ -74,6 +90,28 @@ The preferred interface for agents and test repositories is the CLI.
 For in-process integrations such as future `playwright-reports` usage, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
 
 ## Trace Format
+
+Playwright HTML reports have a report root that looks like this:
+
+```
+playwright-report/
+├── index.html         ← HTML report shell; contains embedded base64 ZIP data
+└── data/
+  ├── <sha1>/
+  ├── <sha1>.zip
+  └── ...
+```
+
+The structured test results JSON does not live as a plain `report.json` file next to `index.html`.
+
+Instead, Playwright embeds it inside `index.html` in a `<template id="playwrightReportBase64">` tag. That template contains a base64-encoded ZIP payload, and inside that ZIP there is a `report.json` file with the report-level test metadata and outcomes.
+
+This is the data loaded by `getReportMetadata()` and used for fields such as:
+
+- report stats
+- test outcomes
+- trace attachment paths like `data/<sha1>.zip`
+- `testId`-based retry deduplication
 
 Playwright HTML reports store traces in `playwright-report/data/<sha1>/`:
 
@@ -139,6 +177,13 @@ console.log(`Error: ${summary.error?.message}`);
 ```
 
 ## API
+
+The API section below describes the exported library functions.
+
+Important distinction:
+
+- the CLI `failures` command now returns compact triage records
+- the library `getFailedTestSummaries()` function still returns full `TraceSummary[]`
 
 ### `getFailedTestSummaries(reportDataDir, options?)`
 
