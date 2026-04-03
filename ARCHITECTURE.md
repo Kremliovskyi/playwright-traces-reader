@@ -1,259 +1,302 @@
 # Playwright Traces Reader Architecture
 
-This document describes the architectural design and data flow of the `playwright-traces-reader` module. The core goal is to parse `playwright-report/data/` trace files into a clean format suitable for LLMs (like GitHub Copilot).
+For the future hub boundary and long-term positioning with `playwright-reports`, see [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md).
 
-## Overview
+For command-by-command CLI usage, see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
-A Playwright HTML report stores one trace **per test execution** inside `playwright-report/data/`. When a test suite contains many tests, `data/` will have many entries. Each entry is either:
-- A SHA1-named **directory** (already extracted), or
-- A SHA1-named **`.zip` archive** (pending extraction).
+For versioned JSON outputs, see [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
 
-Non-trace files (`.md`, `.png`, `.json`, etc.) are also present in `data/` and must be ignored.
+For in-process consumption guidance, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
 
-Inside each SHA1 trace directory the files are:
-- `test.trace` — high-level execution log: `before`/`after` step events, durations, errors, stdout/fixture calls. One `test.trace` = one test.
-- `[N]-trace.trace` — context-level trace NDJSON: browser/API actions, `screencast-frame` entries.
-- `[N]-trace.network` — network HAR-like NDJSON: request/response metadata + `_sha1` pointers to body blobs.
-- `[N]-trace.stacks` — call-stack snapshots (not currently used).
-- `resources/` — raw binary blobs addressed by SHA1 filename (JSON bodies, images, form data, etc.).
+This document describes the current architecture of `playwright-traces-reader` as it exists today: a parser and extractor library with a real local CLI, stable JSON output envelopes, and a CLI-first GitHub Copilot skill scaffold.
 
-All trace files use **Newline-Delimited JSON (NDJSON)** encoding.
+## Current Role
 
-## Module Structure
+`playwright-traces-reader` owns three things:
 
+- local artifact parsing for Playwright traces and reports
+- high-level extraction and summarization APIs over those artifacts
+- a local CLI for humans, agents, and automation
+
+It does not own report inventory, report search, remote storage access, or historical report catalog behavior. Those concerns belong outside this package.
+
+## Supported Inputs
+
+The package is artifact-centric. It operates on local filesystem inputs only:
+
+- a Playwright report root containing `index.html` and `data/`
+- a report `data/` directory
+- a single extracted trace directory
+- a single trace zip
+
+This same input model is used by both the library APIs and the CLI.
+
+## Trace Layout
+
+Playwright HTML reports store one trace per test execution under `data/`.
+
+Each SHA1 trace entry may exist either as an extracted directory or as a `.zip` file.
+
+Typical contents of one extracted trace directory:
+
+```text
+<sha1>/
+├── test.trace          step tree and root test flow
+├── 0-trace.trace       browser context events, snapshots, screenshots, context-options
+├── 0.network           request and response metadata
+└── resources/          blobs referenced by sha1
 ```
+
+Important file roles:
+
+- `test.trace` contains `before` and `after` events used to reconstruct step trees, durations, and failures.
+- `[N]-trace.trace` contains browser context events such as `context-options`, `frame-snapshot`, and `screencast-frame`.
+- `*.network` contains HAR-like `resource-snapshot` events for network traffic.
+- `resources/` stores request bodies, response bodies, and screenshot blobs.
+
+All trace files are newline-delimited JSON.
+
+## Package Structure
+
+```text
 src/
-  parseTrace.ts    — Low-level I/O: prepareTraceDir, listTraces, readNdjson, getResourceBuffer
-  extractors.ts    — High-level extractors and report-level helpers
-  index.ts         — Public re-exports
-  cli.ts           — CLI entry: `npx playwright-traces-reader init-skills`
+  parseTrace.ts         low-level artifact discovery and file access
+  extractors.ts         high-level parsing and summarization APIs
+  index.ts              public exports
+  cli.ts                command-line entry point
+  cli/
+    helpers.ts          CLI path resolution and shared helpers
+    formatters.ts       human-readable text output formatters
+    json.ts             versioned JSON command envelopes
 templates/
-  skills/analyze-playwright-traces/SKILL.md  — GitHub Copilot skill scaffold template
+  skills/
+    analyze-playwright-traces/
+      SKILL.md          CLI-first GitHub Copilot skill template
 tests/
-  sanity.test.ts   — Integration tests against real sc-tests trace data
+  syntheticReport.ts    synthetic Playwright report and trace generator
+  cli.test.ts           CLI integration tests using generated artifacts
+  sanity.test.ts        library integration tests using generated artifacts
 ```
 
-## Core Modules
+## Architecture Layers
 
-### 1. `parseTrace.ts` — Low-Level I/O
+The package is intentionally split into four layers.
 
-#### `listTraces(reportDataDir)`
-Discovers all test traces inside a `data/` directory. Handles:
-- Plain directories (already extracted) — included if `test.trace` exists inside
-- `.zip` archives — extracted in-place (same path without the `.zip` suffix) when the directory form doesn't already exist
-- Symlinks to directories — resolved via `fs.promises.stat` before checking `isDirectory()`
-- Non-trace files (`.md`, `.png`, `.json`, other `.zip` noise) — silently ignored
+### 1. Artifact Access Layer
 
-Returns one `TraceContext` per discovered test. **This is the entry point for multi-test reports.**
+Implemented in `parseTrace.ts`.
 
-#### `prepareTraceDir(tracePath)`
-Takes a single path (directory _or_ `.zip`), extracts if needed, and returns a `TraceContext { traceDir }`.
+This layer is responsible for:
 
-#### `readNdjson<T>(filePath)`
-Async generator that streams and parses lines from an NDJSON file. Silently skips malformed lines. Returns early if the file doesn't exist (robust against optional trace files).
+- resolving a trace directory from either a directory or a `.zip`
+- scanning a report `data/` directory for valid traces
+- reading NDJSON files as async streams
+- loading raw resource blobs by SHA1
+- loading report metadata from `index.html`
+- building lookup maps from report metadata
 
-#### `getResourceBuffer(ctx, sha1)`
-Resolves a SHA1 filename to its raw `Buffer` from `resources/`. Returns `null` if not found.
+Primary APIs:
 
----
+- `prepareTraceDir(tracePath)`
+- `listTraces(reportDataDir)`
+- `readNdjson(filePath)`
+- `getResourceBuffer(traceContext, sha1)`
+- `getReportMetadata(reportDir)`
+- `buildReportTraceMaps(meta)`
 
-### 2. `extractors.ts` — High-Level Extractors
+This layer has no formatting logic and no agent-specific behavior.
 
-#### `getTestSteps(ctx) → TestStep[]`
-Parses `test.trace` by pairing `before` and `after` events via `callId`:
-- Builds a nested tree using `parentId` links.
-- Each `TestStep` carries `title`, `method`, `startTime`, `endTime`, `durationMs`, `error`, `annotations`, and `children`.
-- Steps with no `parentId` (or whose parent wasn't emitted yet) become roots.
+### 2. Extraction Layer
 
-#### `getTopLevelFailures(ctx) → TestStep[]`
-Filters the root-level steps returned by `getTestSteps` to only those where `error !== null`. Returns the full `TestStep` objects (including `.children`), so callers can drill into nested steps to find the specific assertion or action that failed.
+Implemented in `extractors.ts`.
 
-This is a **cheap check** — it reads only `test.trace` and does no DOM/network I/O. `getFailedTestSummaries` uses it as a fast pre-filter to skip passing tests before building a full `TraceSummary`.
+This layer converts low-level trace events into structured domain objects.
 
-#### `getNetworkTraffic(ctx) → NetworkEntry[]`
-Reads **all** `*.network` files (sorted, so context order is preserved). For each `resource-snapshot` entry:
-- Tags entries as `source: 'api'` when `_apiRequest` is present / `pageref` is absent.
-- Tags entries as `source: 'browser'` when `pageref` is present (XHR/navigation traffic).
-- Resolves request body: first tries inline `postData.text`, then resolves `postData._sha1` from `resources/`.
-- Resolves response body: resolves `content._sha1` from `resources/`; for binary MIME types returns a `[binary: ...]` placeholder.
+Core extractors:
 
-#### `extractScreenshots(ctx, outDir) → Screenshot[]`
-Scans every `[N]-trace.trace` file (except `test.trace`) for `screencast-frame` entries:
-- Resolves the frame's `sha1` blob from `resources/`.
-- Writes it as `screenshot-NNNN.jpeg` (or `.png`) into `outDir`.
-- Returns metadata including `savedPath` (absolute), `timestamp`, `pageId`, `width`, `height`.
+- `getTestSteps(ctx)` reconstructs the nested step tree from `test.trace`.
+- `getTopLevelFailures(ctx)` returns only root steps with errors.
+- `getNetworkTraffic(ctx)` parses all `*.network` files and resolves bodies from `resources/`.
+- `extractScreenshots(ctx, outDir)` writes screencast frames to disk and returns metadata.
+- `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`.
+- `getTimeline(ctx)` merges step, screenshot, DOM, and network events into one chronological stream.
+- `getTestTitle(ctx)` reads `context-options` and returns the canonical full test title.
 
-`Screenshot` is a superset of `ScreenshotMetadata` (same fields plus `savedPath`). `ScreenshotMetadata` (without `savedPath`) is what `getTimeline()` embeds in its entries to avoid unexpected disk writes.
+The extractors stay artifact-focused. They do not know about report catalogs, databases, or remote providers.
 
-#### `getDomSnapshots(ctx, options?) → ActionDomSnapshots[]`
-Reads every `[N]-trace.trace` file (except `test.trace`) for `frame-snapshot` events.
+### 3. Summary Layer
 
-**Snapshot phases**: Each browser action emits up to three named snapshots in the trace:
-- `before@callId` — DOM state immediately _before_ the action starts  
-- `input@callId` — DOM state _during_ the action (shown as the "Action" tab in Trace Viewer)  
-- `after@callId` — DOM state immediately _after_ the action completes  
+Also implemented in `extractors.ts`.
 
-Results are aggregated per `callId` into `ActionDomSnapshots { callId, before, action, after }`.
+This layer composes several extractors into higher-level workflows.
 
-**`DomSnapshotOptions`** (optional second argument) filters the result set before returning:
-- `near: 'last'` — return the last `limit` entries (default 5). Best for "what was the page doing just before it failed?"
-- `near: 'call@N'` / any callId string — return a window of `limit` entries centred on that callId.
-- `phase: 'before' | 'action' | 'after'` — keep only entries where that phase is populated.
-- `limit: number` — max entries to return; caps from the beginning when `near` is omitted.
+Main APIs:
 
-Filtering is applied **after** the full snapshot set is resolved so back-reference chains are never broken.
+- `getSummary(ctx, options)` builds one `TraceSummary` for a single trace.
+- `getFailedTestSummaries(reportDataDir, options?)` performs report-level failure analysis and retry deduplication.
 
-**Compact snapshot format**: Playwright stores DOM snapshots as nested arrays `["tagName", {attrs}, ...children]`. To reduce trace file size, repeated subtrees are replaced with **back-references**: `[[offset, nodeIdx]]` where:
-- `offset` — how many positions to look back in this frame's snapshot history  
-- `nodeIdx` — index into the **post-order DFS traversal** of that historical snapshot
+Important current behavior:
 
-Resolution algorithm (mirrors `snapshotNodes()` / `snapshotRenderer.ts` in `playwright-core`):
-1. Maintain a per-frame ordered list of raw `html` nodes (one entry per `frame-snapshot` event, in emission order).
-2. For each snapshot at index `i`, before rendering, append its `html` to the frame list.
-3. When a ref `[[offset, nodeIdx]]` is encountered: `refIndex = i - offset`; build the post-order DFS list of `frameHistory[refIndex]` (memoized); look up `nodes[nodeIdx]` and recurse at `refIndex`.
-4. Post-order DFS: text nodes are pushed **immediately**; element nodes are pushed **after** all their children. Subtree refs are **not** included in the DFS list.
+- `getSummary()` runs step extraction, network extraction, DOM extraction, and title extraction in parallel.
+- `getSummary()` works for both passed and failed traces.
+- `getSummary()` filters hook roots out of `topLevelSteps`.
+- `getSummary()` uses report metadata when available to populate `outcome`.
+- `getFailedTestSummaries()` uses `getTopLevelFailures()` as a cheap pre-filter before building full summaries.
+- `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
+- `getFailedTestSummaries()` keeps the last retry by comparing the latest root-step end time.
 
-**Memoization**: `buildSnapshotNodeList()` is memoized per `html` object reference inside a single `getDomSnapshots()` call, reducing repeated reference chains from O(n × ref_count) to O(n) per snapshot.
+This is the main library interface for consumers that need analysis rather than raw events.
 
----
+### 4. CLI Layer
 
-#### `getTimeline(ctx) → TimelineEntry[]`
-Merges all four event types — steps, screenshots, DOM snapshots, network calls — into a single chronologically sorted array (`TimelineEntry[]`). Each entry has:
-- `timestamp` — wall-clock ms since epoch
-- `type` — `'step' | 'screenshot' | 'dom' | 'network'`
-- `data` — typed payload (cast based on `type`)
+Implemented across `src/cli.ts`, `src/cli/helpers.ts`, `src/cli/formatters.ts`, and `src/cli/json.ts`.
 
-Steps are **flattened** (all nesting levels). Screenshots are `ScreenshotMetadata` (no disk writes). The chronological interleaving lets callers build a narrative without manual timestamp correlation across four separate API calls.
+The CLI is now a real analysis interface, not just a scaffolding helper.
 
----
+Command surface:
 
-#### `getTestTitle(ctx) → string | null`
-Reads numbered trace files (`0-trace.trace`, `1-trace.trace`, …) in order, looking for a `context-options` event that carries a `title` field. Returns the first match as the **full canonical test title** — a string like `"tests/auth.spec.ts:42 › describe › test name"` that includes the spec file path, describe block, and test name.
+- `init-skills [targetDir]`
+- `failures <reportPath>`
+- `summary <tracePath>`
+- `slow-steps <tracePath>`
+- `steps <tracePath>`
+- `network <tracePath>`
+- `dom <tracePath>`
+- `timeline <tracePath>`
+- `screenshots <tracePath> --out-dir <path>`
 
-This title is globally unique within a report run and is the correct deduplication key for retries. Returns `null` for pure API traces that have no browser context.
+Output modes:
 
----
+- `--format text` for terminal-oriented output
+- `--format json` for machine-readable output
 
-#### `getSummary(ctx, options) → TraceSummary`
-Builds a `TraceSummary` for a single `TraceContext` by running four sub-calls in parallel: `getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`. Requires `options: GetSummaryOptions`:
-- `reportMetadata: ReportMetadata | null` — when provided, the trace's SHA1 is looked up in the report to populate `outcome`; when `null`, `outcome` is `null`.
-- `reportTraceMaps?: ReportTraceMaps | null` — pre-built lookup maps from `buildReportTraceMaps()`. When provided, avoids rebuilding the maps on every call — important when calling `getSummary` in a loop with the same report metadata. If omitted or `null`, maps are built on-the-fly from `reportMetadata`.
+Supporting pieces:
 
-Then derives:
-- `title` — root `test.step()` title (failing step takes priority over longest non-hook step)
-- `status` — `'passed'` | `'failed'` based on whether any root step has an error
-- `durationMs` — duration of the main root step
-- `error` — top-level error from the main root step
-- `topLevelSteps` — non-hook root steps (filters out `Before Hooks`, `After Hooks`, `Worker Cleanup`, etc.)
-- `slowestSteps` — top 5 steps by duration across the full flattened tree
-- `networkCalls` — all network entries (both `source === 'api'` and `source === 'browser'`)
-- `failureDomSnapshot` — the `ActionDomSnapshots` whose timestamp is closest to the failure's `endTime`
+- `helpers.ts` resolves report/data paths, loads report metadata for trace commands, validates integers, and scaffolds the skill.
+- `formatters.ts` contains the text renderers so command handlers remain thin.
+- `json.ts` defines stable versioned JSON envelopes for each command.
 
----
+## Current Command Flow
 
-#### `getFailedTestSummaries(reportDataDir, options?) → TraceSummary[]`
-Report-level helper. Encapsulates the full "find unique failing tests" flow internally so callers never need to manage `listTraces`, retry deduplication, or the cheap/expensive call split.
+Each CLI command follows the same pattern:
 
-**Skip detection** (`options.excludeSkipped`):
-- When `index.html` is found next to `data/`, parses the embedded `report.json` ZIP and builds a `Map<sha1, outcome>` from each test result's trace attachment path (`data/<sha1>.zip` → sha1). Each trace directory's basename is looked up directly — works for all trace types (browser and API-only).
-- If `index.html` is not available, falls back to a heuristic for all traces: `{ type: 'skip' }` step annotations or error messages containing `"Test is skipped:"`.
+1. Resolve the input path into the correct local artifact shape.
+2. Call library APIs from `index.ts`.
+3. Convert the result into either text output or a versioned JSON envelope.
+4. Emit the final output through a small I/O abstraction so the CLI can be tested without a real process.
 
-**Dedup**: When `report.json` is available, uses `testId` (shared across retries) as the dedup key — works for all trace types including API-only. Falls back to `getTestTitle()` → `ctx.traceDir`.
+This is why `runCli(argv, io)` exists: tests can execute the CLI in-process and assert on stdout and stderr deterministically.
 
-**Outcome**: Each returned `TraceSummary` has an `outcome` field populated from `report.json` (`'unexpected'`, `'skipped'`, `'flaky'`, or `null` when unavailable).
+## JSON Contract Layer
 
-**Two-pass algorithm:**
+The CLI JSON output is intentionally explicit and versioned.
 
-*Pass 1 — group and select last retry per unique test:*
-- `listTraces(reportDataDir)` — all trace contexts including retries and passing tests
-- For each ctx: `getTopLevelFailures(ctx)` (cheap — reads only `test.trace`)
-  - Empty → skip (passing test)
-  - `options.excludeSkipped` is `true` → look up trace SHA1 in report.json outcome map (or heuristic) → skip if skipped
-  - Dedup key: `testId` from report.json (or `getTestTitle` → `ctx.traceDir`)
-  - Compute `latestEndTime` = max `endTime` (or `startTime`) across the top-level failures
-  - If key already in map and this ctx's `latestEndTime` is not greater → skip (earlier retry)
-  - Otherwise → store/replace `{ ctx, latestEndTime }` for this key
+All command JSON payloads currently include:
 
-*Pass 2 — build summaries only for winning (last) retry:*
-- For each entry in the map: `getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps })` — the expensive call is made at most once per unique failing test, and always on the most recent execution. Pre-built `traceMaps` are passed through so the maps are built once rather than on every `getSummary` call.
+- `schemaVersion`
+- `command`
+- a command-specific payload such as `summary`, `failures`, `entries`, `steps`, `snapshots`, or `screenshots`
 
----
+This contract is documented separately in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md), but architecturally it matters because it creates a stable boundary for:
 
-#### `buildReportTraceMaps(meta) → ReportTraceMaps`
-Builds SHA1-keyed lookup maps from parsed `ReportMetadata`. Iterates over all test results and their trace attachments to create two maps:
-- `outcomeByTraceSha1` — maps a trace directory's SHA1 basename to the test's outcome (`'expected'`, `'unexpected'`, `'flaky'`, `'skipped'`)
-- `testIdByTraceSha1` — maps a trace directory's SHA1 basename to the test's unique ID
+- agents
+- shell automation
+- future integrations
+- tests that assert on command shape rather than terminal formatting
 
-Used by `getSummary` internally (on-the-fly when `reportTraceMaps` is not provided) and by `getFailedTestSummaries` for both outcome lookup and `testId`-based deduplication. Callers can pre-build the maps via `buildReportTraceMaps(meta)` and pass them to `getSummary` in a loop to avoid redundant rebuilds.
+## Skill Architecture
 
----
+The bundled GitHub Copilot skill scaffold is now CLI-first.
 
-#### `getReportMetadata(reportDir) → ReportMetadata | null`
-Parses the `report.json` embedded inside a Playwright HTML report's `index.html`. The HTML reporter encodes all test metadata (outcomes, stats, file summaries) as a base64-encoded ZIP in a `<template id="playwrightReportBase64">` tag. This function extracts that ZIP and returns the parsed JSON.
+`init-skills` copies `templates/skills/analyze-playwright-traces/SKILL.md` into the target repository. That skill is intentionally thin:
 
-Accepts either the report root directory (containing `index.html`) or the `data/` subdirectory (looks one level up). Returns `null` if `index.html` is not found or does not contain the expected template tag.
+- it tells agents to use supported CLI commands
+- it avoids temporary script generation
+- it points users to `CLI_REFERENCE.md` and `CLI_JSON_CONTRACTS.md`
+- it leaves direct library integration guidance to `LIBRARY_INTEGRATION.md`
 
-`ReportMetadata` contains:
-- `stats` — aggregate counts (`total`, `expected`, `unexpected`, `flaky`, `skipped`)
-- `files` — array of `{ fileId, fileName, tests: ReportTestSummary[] }`
-- `projectNames`, `startTime`, `duration`
+That split is deliberate. The skill is the agent-facing command surface; the library docs are for in-process consumers.
 
-Each `ReportTestSummary` includes `testId`, `title`, `path`, `outcome`, `location`, `annotations`, `tags`, `duration`, and `results` (array of result objects, each with `attachments` containing trace paths like `data/<sha1>.zip`).
+## Testing Architecture
 
----
+The test suite no longer depends on stored real reports from another repository.
 
-### 3. Agent Skills Scaffold
+Instead, the package now uses generated synthetic artifacts created at test runtime.
 
-`src/cli.ts` provides:
-```
-npx playwright-traces-reader init-skills [targetDir]
-```
-Copies `templates/skills/analyze-playwright-traces/SKILL.md` into `<targetDir>/.github/skills/analyze-playwright-traces/SKILL.md`. The template contains usage examples for all extractor functions.
+`tests/syntheticReport.ts` builds a temporary Playwright-like report structure with:
 
----
+- report `index.html` containing embedded base64 ZIP metadata
+- a `data/` directory with multiple trace entries
+- both extracted and zip-only traces
+- network resources and screenshot blobs
+- passing, failing, skipped, and retry scenarios
 
-## Typical Usage Pattern (Multi-Test Report)
+This gives the test suite three benefits:
 
-```typescript
-import { getFailedTestSummaries } from 'playwright-traces-reader';
+- no dependency on external repositories or checked-in report artifacts
+- deterministic coverage of retry, skip, zip extraction, and metadata mapping behavior
+- automatic cleanup after each suite run
 
-// Returns one TraceSummary per unique failing test — retries deduplicated,
-// passing tests excluded, last retry selected automatically.
-const failures = await getFailedTestSummaries('/path/to/playwright-report/data');
+Current test split:
 
-for (const f of failures) {
-  console.log(`FAILED: ${f.testTitle ?? f.title}`);
-  console.log(`Error: ${f.error?.message}`);
-  for (const call of f.networkCalls) {
-    console.log(`  ${call.method} ${call.url} → ${call.status}`);
-  }
-  if (f.failureDomSnapshot?.after) {
-    console.log('DOM at failure:', f.failureDomSnapshot.after.html.slice(0, 500));
-  }
-}
+- `tests/sanity.test.ts` validates library behavior directly
+- `tests/cli.test.ts` validates CLI behavior through `runCli()`
+
+## Data Flow
+
+### Single-trace analysis
+
+```text
+trace dir or trace zip
+  -> prepareTraceDir
+  -> getSummary / getTestSteps / getNetworkTraffic / getDomSnapshots / getTimeline
+  -> structured result
+  -> optional CLI formatter or JSON envelope
 ```
 
-## Data Flow Diagram
+### Report-level failure analysis
 
-```
-playwright-report/data/
-├── <sha1-a>/           ← TraceContext A
-│   ├── test.trace      ← getTestSteps / getTopLevelFailures / getSummary
-│   ├── 0-trace.trace   ← extractScreenshots / getDomSnapshots / getTimeline / getTestTitle
-│   ├── 0-trace.network ← getNetworkTraffic (api traffic)
-│   ├── 8-trace.trace   ← extractScreenshots / getDomSnapshots (browser context)
-│   ├── 8-trace.network ← getNetworkTraffic (browser traffic)
-│   └── resources/      ← getResourceBuffer (body blobs, jpegs)
-├── <sha1-a>.zip        ← ignored (dir already extracted)
-├── <sha1-b>.zip        ← listTraces auto-extracts → TraceContext B
-├── screenshot.png      ← ignored (not a trace)
-└── test-info.md        ← ignored (not a trace)
+```text
+report root or report data dir
+  -> resolveReportDataDir
+  -> listTraces
+  -> getTopLevelFailures per trace
+  -> retry grouping and skip filtering
+  -> getSummary for winning traces only
+  -> TraceSummary[]
+  -> optional CLI formatter or JSON envelope
 ```
 
-## Scalability & Extensibility
+## Design Constraints
 
-- All extractor functions are stateless and `async`/awaitable — safe to run in parallel across many traces.
-- `getSummary` runs its four sub-calls (`getTestSteps`, `getNetworkTraffic`, `getDomSnapshots`, `getTestTitle`) in parallel via `Promise.all`.
-- `getFailedTestSummaries` calls `getSummary` only for unique failing tests (not for passing tests or earlier retries), keeping its cost proportional to the number of distinct failures.
-- The skill template targets GitHub Copilot today but its Markdown/CLI-first design makes it straightforward to adapt for other agents (Claude, OpenAI Assistants, etc.).
+The current architecture follows these constraints:
 
+1. Keep parsing and extraction logic independent from command-line formatting.
+2. Keep CLI commands independent from external services and remote storage.
+3. Keep report metadata handling optional so single-trace analysis still works without `index.html`.
+4. Keep test coverage self-contained so the package does not rely on external fixture repositories.
+5. Keep the public library usable independently of the CLI.
+
+## Relationship To Future Hub Work
+
+Today, `playwright-traces-reader` is a local parser and analysis tool.
+
+The future role described in [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md) stays the same:
+
+- this package remains the parsing and CLI engine
+- `playwright-reports` can import it in-process for historical workflows
+- remote resolution and materialization stay outside this package
+
+That means the current implementation already matches the intended boundary: local artifacts in, structured analysis out.
+
+## Summary
+
+The current architecture is:
+
+- a low-level artifact access layer
+- a high-level extraction and summary layer
+- a real local CLI with text and JSON outputs
+- a CLI-first skill scaffold for agents
+- a self-contained synthetic test harness
+
+This keeps the package small, local, and reusable while still providing a stable automation surface for agents and future higher-level consumers.

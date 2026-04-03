@@ -43,7 +43,8 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16"
+    "adm-zip": "^0.5.16",
+    "commander": "^13.1.0"
   },
   "jest": {
     "testEnvironment": "node",

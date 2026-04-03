@@ -1,44 +1,223 @@
 #!/usr/bin/env node
-import * as fs from 'fs';
-import * as path from 'path';
+import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import {
+  extractScreenshots,
+  getDomSnapshots,
+  getFailedTestSummaries,
+  getNetworkTraffic,
+  getSummary,
+  getTestSteps,
+  getTimeline,
+  prepareTraceDir,
+} from './index';
+import {
+  copySkillTemplate,
+  loadReportMetadataForTrace,
+  parsePositiveInteger,
+  resolveReportDataDir,
+} from './cli/helpers';
+import {
+  emitOutput,
+  formatDomSnapshotsText,
+  formatFailuresText,
+  formatNetworkText,
+  formatScreenshotsText,
+  formatSlowStepsText,
+  formatStepsText,
+  formatSummaryText,
+  formatTimelineText,
+  type OutputFormat,
+} from './cli/formatters';
+import {
+  createDomCommandJson,
+  createFailuresCommandJson,
+  createNetworkCommandJson,
+  createScreenshotsCommandJson,
+  createSlowStepsCommandJson,
+  createStepsCommandJson,
+  createSummaryCommandJson,
+  createTimelineCommandJson,
+} from './cli/json';
+import type { DomSnapshotOptions } from './index';
 
-const [, , command, ...args] = process.argv;
-
-async function initSkills(targetDir: string): Promise<void> {
-  const skillDir = path.join(targetDir, '.github', 'skills', 'analyze-playwright-traces');
-  await fs.promises.mkdir(skillDir, { recursive: true });
-
-  // Copy the template SKILL.md from this package
-  const templatePath = path.resolve(__dirname, '..', 'templates', 'skills', 'analyze-playwright-traces', 'SKILL.md');
-  const destPath = path.join(skillDir, 'SKILL.md');
-
-  if (!fs.existsSync(templatePath)) {
-    console.error(`Template not found at ${templatePath}`);
-    process.exit(1);
-  }
-
-  await fs.promises.copyFile(templatePath, destPath);
-  console.log(`✔ Skill scaffolded at ${destPath}`);
+export interface CliIo {
+  stdout: (text: string) => void;
+  stderr: (text: string) => void;
 }
 
-async function main(): Promise<void> {
-  if (command === 'init-skills') {
-    const targetDir = args[0] ?? process.cwd();
-    await initSkills(targetDir);
-    return;
-  }
+const defaultIo: CliIo = {
+  stdout: text => process.stdout.write(text),
+  stderr: text => process.stderr.write(text),
+};
 
-  console.log(`
-playwright-traces-reader — CLI for parsing Playwright trace files
-
-Usage:
-  npx playwright-traces-reader init-skills [targetDir]
-    Scaffolds the GitHub Copilot skill template into <targetDir>/.github/skills/analyze-playwright-traces/SKILL.md
-    Defaults targetDir to the current working directory.
-`);
+function parseFormat(value: string): OutputFormat {
+  if (value === 'text' || value === 'json') return value;
+  throw new InvalidArgumentError(`Invalid format: ${value}. Expected "text" or "json".`);
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+function buildProgram(io: CliIo): Command {
+  const program = new Command();
+  program
+    .name('playwright-traces-reader')
+    .description('CLI for analyzing Playwright reports and traces')
+    .showHelpAfterError()
+    .configureOutput({
+      writeOut: text => io.stdout(text),
+      writeErr: text => io.stderr(text),
+    })
+    .exitOverride();
+
+  program
+    .command('init-skills [targetDir]')
+    .description('Scaffold the analyze-playwright-traces skill into a target repository')
+    .action(async (targetDir?: string) => {
+      const destPath = await copySkillTemplate(targetDir ?? process.cwd());
+      io.stdout(`Skill scaffolded at ${destPath}\n`);
+    });
+
+  program
+    .command('failures <reportPath>')
+    .description('Analyze unique failing tests in a Playwright report root or data directory')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('--exclude-skipped', 'Exclude skipped tests from the result set', false)
+    .action(async (reportPath: string, options: { format: OutputFormat; excludeSkipped: boolean }) => {
+      const reportDataDir = await resolveReportDataDir(reportPath);
+      const summaries = await getFailedTestSummaries(reportDataDir, {
+        excludeSkipped: options.excludeSkipped,
+      });
+
+      emitOutput(io, options.format, createFailuresCommandJson(summaries), formatFailuresText(summaries));
+    });
+
+  program
+    .command('summary <tracePath>')
+    .description('Summarize a single trace directory or trace zip')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('--report <reportPath>', 'Optional report root or data directory used to load report metadata')
+    .action(async (tracePath: string, options: { format: OutputFormat; report?: string }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const reportMetadata = await loadReportMetadataForTrace(traceContext, options.report);
+      const summary = await getSummary(traceContext, { reportMetadata });
+
+      emitOutput(io, options.format, createSummaryCommandJson(summary), formatSummaryText(summary));
+    });
+
+  program
+    .command('slow-steps <tracePath>')
+    .description('Show the slowest steps for a single trace')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('-n, --limit <count>', 'Maximum number of steps to return', parsePositiveInteger, 5)
+    .option('--report <reportPath>', 'Optional report root or data directory used to load report metadata')
+    .action(async (tracePath: string, options: { format: OutputFormat; limit: number; report?: string }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const reportMetadata = await loadReportMetadataForTrace(traceContext, options.report);
+      const summary = await getSummary(traceContext, { reportMetadata });
+      const slowestSteps = summary.slowestSteps.slice(0, options.limit);
+
+      emitOutput(io, options.format, createSlowStepsCommandJson(slowestSteps), formatSlowStepsText(slowestSteps));
+    });
+
+  program
+    .command('steps <tracePath>')
+    .description('Print the reconstructed test step tree for a single trace')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .action(async (tracePath: string, options: { format: OutputFormat }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const steps = await getTestSteps(traceContext);
+
+      emitOutput(io, options.format, createStepsCommandJson(steps), formatStepsText(steps));
+    });
+
+  program
+    .command('network <tracePath>')
+    .description('Inspect network traffic for a single trace')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('--source <source>', 'Filter by source: all, api, or browser', 'all')
+    .action(async (tracePath: string, options: { format: OutputFormat; source: string }) => {
+      if (!['all', 'api', 'browser'].includes(options.source)) {
+        throw new Error(`Invalid source: ${options.source}. Expected all, api, or browser.`);
+      }
+
+      const traceContext = await prepareTraceDir(tracePath);
+      const networkEntries = await getNetworkTraffic(traceContext);
+      const filteredEntries = options.source === 'all'
+        ? networkEntries
+        : networkEntries.filter(entry => entry.source === options.source);
+
+      emitOutput(io, options.format, createNetworkCommandJson(filteredEntries), formatNetworkText(filteredEntries));
+    });
+
+  program
+    .command('dom <tracePath>')
+    .description('Inspect DOM snapshots for a single trace')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .option('--near <near>', 'Return snapshots near a callId, or use "last"')
+    .option('--phase <phase>', 'Filter to before, action, or after phase')
+    .option('-n, --limit <count>', 'Maximum number of action snapshots to return', parsePositiveInteger)
+    .action(async (
+      tracePath: string,
+      options: { format: OutputFormat; near?: string; phase?: 'before' | 'action' | 'after'; limit?: number },
+    ) => {
+      if (options.phase && !['before', 'action', 'after'].includes(options.phase)) {
+        throw new Error(`Invalid phase: ${options.phase}. Expected before, action, or after.`);
+      }
+
+      const traceContext = await prepareTraceDir(tracePath);
+      const domOptions: DomSnapshotOptions = {};
+      if (options.near !== undefined) domOptions.near = options.near;
+      if (options.phase !== undefined) domOptions.phase = options.phase;
+      if (options.limit !== undefined) domOptions.limit = options.limit;
+
+      const domSnapshots = await getDomSnapshots(traceContext, domOptions);
+
+      emitOutput(io, options.format, createDomCommandJson(domSnapshots), formatDomSnapshotsText(domSnapshots));
+    });
+
+  program
+    .command('timeline <tracePath>')
+    .description('Print a merged chronological timeline for a single trace')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .action(async (tracePath: string, options: { format: OutputFormat }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const timeline = await getTimeline(traceContext);
+
+      emitOutput(io, options.format, createTimelineCommandJson(timeline), formatTimelineText(timeline));
+    });
+
+  program
+    .command('screenshots <tracePath>')
+    .description('Extract screenshots from a trace to a local output directory')
+    .requiredOption('-o, --out-dir <path>', 'Directory to write extracted screenshots into')
+    .option('-f, --format <format>', 'Output format: text or json', parseFormat, 'text')
+    .action(async (tracePath: string, options: { format: OutputFormat; outDir: string }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const screenshots = await extractScreenshots(traceContext, options.outDir);
+
+      emitOutput(io, options.format, createScreenshotsCommandJson(screenshots), formatScreenshotsText(screenshots));
+    });
+
+  return program;
+}
+
+export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<number> {
+  const program = buildProgram(io);
+
+  try {
+    await program.parseAsync(argv, { from: 'user' });
+    return 0;
+  } catch (error) {
+    if (error instanceof CommanderError) {
+      return error.exitCode;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    io.stderr(`${message}\n`);
+    return 1;
+  }
+}
+
+if (require.main === module) {
+  runCli(process.argv.slice(2)).then(exitCode => {
+    process.exit(exitCode);
+  });
+}

@@ -2,6 +2,11 @@
 
 Parse [Playwright](https://playwright.dev) trace files into structured data — useful for AI agents, custom reporters, and post-run analysis tooling.
 
+See [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md) for the future CLI and report-hub architecture overview.
+See [CLI_REFERENCE.md](CLI_REFERENCE.md) for the detailed CLI command reference.
+See [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md) for the versioned JSON output contracts used by the CLI.
+See [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md) for in-process library usage guidance.
+
 ## Features
 
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
@@ -21,6 +26,35 @@ Parse [Playwright](https://playwright.dev) trace files into structured data — 
 npm install @andrii_kremlovskyi/playwright-traces-reader
 ```
 
+## CLI
+
+The package exposes a local CLI. In a repository that has the package installed, use it with `npx`:
+
+```bash
+npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader summary ./playwright-report/data/<sha1>
+npx playwright-traces-reader network ./playwright-report/data/<sha1> --format json
+```
+
+Phase 1 commands:
+
+- `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
+- `failures <reportPath>` — report-level unique failing test analysis
+- `summary <tracePath>` — one-call trace summary
+- `slow-steps <tracePath>` — slowest steps from a single trace
+- `steps <tracePath>` — step tree reconstruction
+- `network <tracePath>` — API and browser network traffic
+- `dom <tracePath>` — DOM snapshots before, during, and after actions
+- `timeline <tracePath>` — merged chronological trace timeline
+- `screenshots <tracePath> --out-dir <path>` — extract screenshots for human inspection
+
+Supported output modes in Phase 1:
+
+- `--format text` — human-readable terminal output
+- `--format json` — structured output for agents and automation
+
+JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
+
 ## GitHub Copilot Skill
 
 Install a ready-made GitHub Copilot skill scaffold into your project:
@@ -31,7 +65,13 @@ npx @andrii_kremlovskyi/playwright-traces-reader init-skills
 npx @andrii_kremlovskyi/playwright-traces-reader init-skills ./my-project
 ```
 
-This copies a `SKILL.md` template to `.github/skills/analyze-playwright-traces/SKILL.md` with code examples for all extractor functions. Once in place, GitHub Copilot will use the skill automatically when answering questions about your Playwright test runs.
+This copies a `SKILL.md` template to `.github/skills/analyze-playwright-traces/SKILL.md`. The skill is CLI-first and points Copilot to supported `npx playwright-traces-reader ...` commands instead of temporary script generation.
+
+## Library Integration
+
+The preferred interface for agents and test repositories is the CLI.
+
+For in-process integrations such as future `playwright-reports` usage, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
 
 ## Trace Format
 
@@ -63,7 +103,7 @@ for (const f of failures) {
   console.log(`Error: ${f.error?.message}`);
   console.log(`Duration: ${f.durationMs}ms`);
 
-  for (const call of f.apiCalls) {
+  for (const call of f.networkCalls) {
     console.log(`  ${call.method} ${call.url} → ${call.status}`);
   }
 
