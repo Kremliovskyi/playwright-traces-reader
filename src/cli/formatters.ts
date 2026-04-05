@@ -1,8 +1,14 @@
 import type {
   ActionDomSnapshots,
+  ActionDiagnosticSummary,
+  AttachmentEntry,
+  ConsoleEntry,
   NetworkEntry,
+  ReportFailurePatterns,
+  SavedAttachment,
   Screenshot,
   TestStep,
+  TraceIssue,
   TimelineEntry,
   TraceSummary,
 } from '../index';
@@ -48,23 +54,35 @@ export function formatPrepareReportText(report: HubReportDescriptor, mode: strin
   ].join('\n');
 }
 
-export function formatFailuresText(failures: FailureListItem[]): string {
+export function formatFailuresText(failures: FailureListItem[], patterns?: ReportFailurePatterns): string {
   if (failures.length === 0) return 'No failing tests found.';
 
-  return failures.map((failure, index) => {
+  const failureText = failures.map((failure, index) => {
     const title = failure.testTitle ?? failure.title;
     const errorLine = failure.errorMessage ?? 'No error message available';
 
-    return [
+    const lines = [
       `${index + 1}. [${failure.outcome ?? failure.status}] ${title}`,
       `   Duration: ${formatDuration(failure.durationMs)}`,
       `   Error: ${errorLine}`,
       `   Trace SHA1: ${failure.traceSha1}`,
       `   Trace path: ${failure.tracePath}`,
       `   Network: ${failure.networkCallCount} calls (${failure.networkErrorCount} errors)`,
+      `   Issues: ${failure.issueCount} | Correlated actions: ${failure.correlatedActionCount}`,
       `   Failure DOM snapshot: ${failure.hasFailureDomSnapshot ? 'yes' : 'no'}`,
-    ].join('\n');
+    ];
+
+    if (failure.primaryRelatedAction) {
+      lines.push(
+        `   Primary related action: ${failure.primaryRelatedAction.action.callId} ${failure.primaryRelatedAction.action.title}`,
+      );
+    }
+
+    return lines.join('\n');
   }).join('\n\n');
+
+  const patternText = patterns ? formatFailurePatternsText(patterns) : '';
+  return patternText ? `${failureText}\n\n${patternText}` : failureText;
 }
 
 export function formatSummaryText(summary: TraceSummary): string {
@@ -90,6 +108,16 @@ export function formatSummaryText(summary: TraceSummary): string {
 
   if (summary.networkCalls.length > 0) {
     lines.push(`Network calls: ${summary.networkCalls.length}`);
+  }
+
+  if (summary.issues.length > 0) {
+    lines.push(`Issues: ${summary.issues.length}`);
+    lines.push(indentBlock(formatIssuePreview(summary.issues), 2));
+  }
+
+  if (summary.actionDiagnostics.length > 0) {
+    lines.push('Related actions:');
+    lines.push(indentBlock(formatActionDiagnosticsText(summary.actionDiagnostics), 2));
   }
 
   if (summary.failureDomSnapshot) {
@@ -123,9 +151,13 @@ export function formatNetworkText(entries: NetworkEntry[]): string {
 
   return entries.map((entry, index) => {
     const lines = [
-      `${index + 1}. [${entry.source}] ${entry.method} ${entry.url} -> ${entry.status} ${entry.statusText}`,
+      `${entry.id}. [${entry.source}] ${entry.method} ${entry.url} -> ${entry.status} ${entry.statusText}`,
       `   Duration: ${entry.durationMs}ms | MIME: ${entry.mimeType || 'unknown'}`,
     ];
+
+    if (entry.relatedAction) {
+      lines.push(`   Related action: ${entry.relatedAction.callId} ${entry.relatedAction.title}`);
+    }
 
     const requestBody = truncate(entry.requestBody, 240);
     if (requestBody) lines.push(`   Request body: ${requestBody}`);
@@ -135,6 +167,151 @@ export function formatNetworkText(entries: NetworkEntry[]): string {
 
     return lines.join('\n');
   }).join('\n\n');
+}
+
+export function formatRequestText(entry: NetworkEntry): string {
+  const lines = [
+    `[${entry.source}] ${entry.method} ${entry.url}`,
+    `Status: ${entry.status} ${entry.statusText}`,
+    `Duration: ${entry.durationMs}ms`,
+    `MIME: ${entry.mimeType || 'unknown'}`,
+    `Started: ${entry.startedDateTime}`,
+  ];
+
+  if (entry.relatedAction)
+    lines.push(`Related action: ${entry.relatedAction.callId} ${entry.relatedAction.title}`);
+
+  if (entry.requestHeaders.length) {
+    lines.push('Request headers:');
+    for (const header of entry.requestHeaders)
+      lines.push(`  ${header.name}: ${header.value}`);
+  }
+
+  if (entry.requestBody) {
+    lines.push('Request body:');
+    lines.push(indentBlock(entry.requestBody, 2));
+  }
+
+  if (entry.responseHeaders.length) {
+    lines.push('Response headers:');
+    for (const header of entry.responseHeaders)
+      lines.push(`  ${header.name}: ${header.value}`);
+  }
+
+  if (entry.responseBody) {
+    lines.push('Response body:');
+    lines.push(indentBlock(entry.responseBody, 2));
+  }
+
+  return lines.join('\n');
+}
+
+export function formatConsoleText(entries: ConsoleEntry[]): string {
+  if (entries.length === 0) return 'No console entries found.';
+
+  return entries.map((entry, index) => {
+    const lines = [
+      `${index + 1}. [${entry.source}] ${entry.level} ${entry.text}`,
+      `   Timestamp: ${entry.timestamp}`,
+    ];
+
+    if (entry.location) {
+      lines.push(`   Location: ${entry.location.url}:${entry.location.lineNumber}:${entry.location.columnNumber}`);
+    }
+
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+export function formatErrorsText(errors: TraceIssue[]): string {
+  if (errors.length === 0) return 'No issues found.';
+
+  return errors.map((entry, index) => {
+    const lines = [
+      `${index + 1}. [${entry.source}] ${entry.name ?? 'Error'}: ${firstLine(entry.message) ?? entry.message}`,
+    ];
+
+    if (entry.title)
+      lines.push(`   Title: ${entry.title}`);
+    if (entry.callId)
+      lines.push(`   Call ID: ${entry.callId}`);
+    if (entry.relatedAction)
+      lines.push(`   Related action: ${entry.relatedAction.callId} ${entry.relatedAction.title}`);
+    if (entry.timestamp !== null)
+      lines.push(`   Timestamp: ${entry.timestamp}`);
+    if (entry.location)
+      lines.push(`   Location: ${entry.location.file}:${entry.location.line}:${entry.location.column}`);
+    if (entry.stack)
+      lines.push(`   Stack: ${truncate(singleLine(entry.stack), 240)}`);
+
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+export function formatAttachmentsText(attachments: AttachmentEntry[]): string {
+  if (attachments.length === 0) return 'No attachments found.';
+
+  return attachments.map((attachment, index) => {
+    const lines = [
+      `${index + 1}. ${attachment.name} (${attachment.contentType})`,
+      `   Attachment ID: ${attachment.id}`,
+      `   Call ID: ${attachment.callId}`,
+    ];
+
+    if (attachment.actionTitle)
+      lines.push(`   Action: ${attachment.actionTitle}`);
+    if (attachment.size !== null)
+      lines.push(`   Size: ${attachment.size} bytes`);
+
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+export function formatAttachmentText(attachment: SavedAttachment): string {
+  return [
+    `Saved attachment ${attachment.name}`,
+    `Content type: ${attachment.contentType}`,
+    `Call ID: ${attachment.callId}`,
+    `Saved path: ${attachment.savedPath}`,
+  ].join('\n');
+}
+
+export function formatFailurePatternsText(patterns: ReportFailurePatterns): string {
+  const sections: string[] = [];
+
+  if (patterns.repeatedFailingRequests.length > 0) {
+    sections.push('Repeated failing requests:');
+    sections.push(indentBlock(patterns.repeatedFailingRequests.map((pattern, index) => {
+      const lines = [
+        `${index + 1}. ${pattern.signature} in ${pattern.count} failures`,
+        `   Example URL: ${pattern.url}`,
+        `   Statuses: ${pattern.statuses.join(', ')}`,
+      ];
+
+      if (pattern.relatedActions.length > 0)
+        lines.push(`   Related actions: ${pattern.relatedActions.map(action => `${action.callId} ${action.title}`).join(' | ')}`);
+
+      return lines.join('\n');
+    }).join('\n\n'), 2));
+  }
+
+  if (patterns.repeatedIssues.length > 0) {
+    sections.push('Repeated correlated issues:');
+    sections.push(indentBlock(patterns.repeatedIssues.map((pattern, index) => {
+      const lines = [
+        `${index + 1}. [${pattern.source}] ${pattern.name ?? 'Error'}: ${pattern.message}`,
+        `   Signature: ${pattern.signature}`,
+        `   Seen in: ${pattern.count} failures`,
+      ];
+
+      if (pattern.relatedActions.length > 0)
+        lines.push(`   Related actions: ${pattern.relatedActions.map(action => `${action.callId} ${action.title}`).join(' | ')}`);
+
+      return lines.join('\n');
+    }).join('\n\n'), 2));
+  }
+
+  return sections.join('\n');
 }
 
 export function formatDomSnapshotsText(snapshots: ActionDomSnapshots[]): string {
@@ -199,6 +376,19 @@ function appendStepLines(lines: string[], step: TestStep, depth: number): void {
   for (const child of step.children) {
     appendStepLines(lines, child, depth + 1);
   }
+}
+
+function formatIssuePreview(issues: TraceIssue[]): string {
+  return issues.slice(0, 3).map((issue, index) => {
+    const actionText = issue.relatedAction ? ` | ${issue.relatedAction.callId} ${issue.relatedAction.title}` : '';
+    return `${index + 1}. [${issue.source}] ${firstLine(issue.message) ?? issue.name ?? 'Error'}${actionText}`;
+  }).join('\n');
+}
+
+function formatActionDiagnosticsText(actions: ActionDiagnosticSummary[]): string {
+  return actions.slice(0, 3).map((diagnostic, index) => {
+    return `${index + 1}. ${diagnostic.action.callId} ${diagnostic.action.title} | network ${diagnostic.networkCallCount} (${diagnostic.failingNetworkCallCount} failing) | issues ${diagnostic.issueCount}`;
+  }).join('\n');
 }
 
 function formatDuration(durationMs: number | null): string {

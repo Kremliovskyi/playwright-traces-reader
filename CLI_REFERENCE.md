@@ -29,8 +29,13 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | `slow-steps` | trace | Return the slowest steps for a single trace |
 | `steps` | trace | Reconstruct and print the step tree |
 | `network` | trace | Inspect API and browser network traffic |
+| `request` | trace | Inspect one network request in detail |
+| `console` | trace | Inspect browser console, page errors, stdout, and stderr |
+| `errors` | trace | Inspect failed steps, page errors, and trace-level issues |
 | `dom` | trace | Inspect DOM snapshots |
 | `timeline` | trace | Build a merged chronological event stream |
+| `attachments` | trace | List trace attachments |
+| `attachment` | trace | Extract one trace attachment |
 | `screenshots` | trace | Extract screenshots for human inspection |
 
 ## Common Inputs
@@ -151,6 +156,8 @@ Behavior:
 - retries are deduplicated
 - output is intentionally compact for report-level triage
 - each item includes `tracePath` and `traceSha1`
+- each item includes issue counts and the primary related browser action when available
+- output also includes repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures
 - use `summary <tracePath>` to inspect one selected failure in full
 
 Examples:
@@ -179,7 +186,7 @@ Accepted inputs:
 Behavior:
 
 - works for passed and failed traces
-- includes status, duration, top-level steps, slowest steps, network calls, and optional failure DOM state
+- includes status, duration, top-level steps, slowest steps, network calls, issues, related-action diagnostics, and optional failure DOM state
 - `--report` improves outcome resolution by loading report metadata explicitly
 
 Examples:
@@ -234,7 +241,7 @@ Inspects network traffic for one trace.
 Usage:
 
 ```bash
-npx playwright-traces-reader network <tracePath> [--source all|api|browser] [--format json|text]
+npx playwright-traces-reader network <tracePath> [--source all|api|browser] [--grep <pattern>] [--method <method>] [--status <code>] [--failed] [--near <callId>] [--limit <count>] [--format json|text]
 ```
 
 Options:
@@ -242,12 +249,69 @@ Options:
 - `--source all` returns all entries
 - `--source api` returns Node.js API traffic only
 - `--source browser` returns browser traffic only
+- `--grep` filters by URL pattern
+- `--method` filters by HTTP method
+- `--status` filters by HTTP status code
+- `--failed` keeps only status >= 400
+- `--near` keeps only requests correlated to a specific action callId
+- `--limit` bounds the number of returned requests
 
 Examples:
 
 ```bash
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1> --source api --format text
+npx playwright-traces-reader network ./playwright-report/data/<sha1> --failed --near call@123
+```
+
+## `request`
+
+Inspects one network request in detail by its request ID.
+
+Usage:
+
+```bash
+npx playwright-traces-reader request <tracePath> <requestId> [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader request ./playwright-report/data/<sha1> 12
+```
+
+## `console`
+
+Inspects browser console entries, page errors, stdout, and stderr for one trace.
+
+Usage:
+
+```bash
+npx playwright-traces-reader console <tracePath> [--errors-only] [--warnings] [--browser] [--stdio] [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader console ./playwright-report/data/<sha1>
+npx playwright-traces-reader console ./playwright-report/data/<sha1> --errors-only --format text
+```
+
+## `errors`
+
+Inspects failed steps, page errors, and trace-level issues for one trace.
+
+Usage:
+
+```bash
+npx playwright-traces-reader errors <tracePath> [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader errors ./playwright-report/data/<sha1>
+npx playwright-traces-reader errors ./playwright-report/data/<sha1> --format text
 ```
 
 ## `dom`
@@ -296,6 +360,26 @@ Examples:
 ```bash
 npx playwright-traces-reader timeline ./playwright-report/data/<sha1>
 npx playwright-traces-reader timeline ./playwright-report/data/<sha1> --format text
+```
+
+## `attachments`
+
+Lists attachments captured in a trace.
+
+Usage:
+
+```bash
+npx playwright-traces-reader attachments <tracePath> [--format json|text]
+```
+
+## `attachment`
+
+Extracts one attachment from a trace by its attachment ID.
+
+Usage:
+
+```bash
+npx playwright-traces-reader attachment <tracePath> <attachmentId> [--output <path>] [--format json|text]
 ```
 
 ## `screenshots`

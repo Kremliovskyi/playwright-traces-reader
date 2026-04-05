@@ -52,7 +52,7 @@ Typical contents of one extracted trace directory:
 Important file roles:
 
 - `test.trace` contains `before` and `after` events used to reconstruct step trees, durations, and failures.
-- `[N]-trace.trace` contains browser context events such as `context-options`, `frame-snapshot`, and `screencast-frame`.
+- `[N]-trace.trace` contains browser context events such as `context-options`, `frame-snapshot`, `screencast-frame`, console entries, page errors, stdout/stderr, and action-level attachments.
 - `*.network` contains HAR-like `resource-snapshot` events for network traffic.
 - `resources/` stores request bodies, response bodies, and screenshot blobs.
 
@@ -118,7 +118,12 @@ Core extractors:
 
 - `getTestSteps(ctx)` reconstructs the nested step tree from `test.trace`.
 - `getTopLevelFailures(ctx)` returns only root steps with errors.
-- `getNetworkTraffic(ctx)` parses all `*.network` files and resolves bodies from `resources/`.
+- `getNetworkTraffic(ctx, options?)` parses all `*.network` files, resolves bodies from `resources/`, assigns per-trace request IDs, and correlates requests to nearby browser actions.
+- `getNetworkRequest(ctx, requestId)` returns one detailed request by the per-trace ID returned from `getNetworkTraffic()`.
+- `getConsoleEntries(ctx)` extracts browser console, page-error, stdout, and stderr signals.
+- `getTraceIssues(ctx)` combines step failures, page errors, and trace-level issues into one correlated issue stream.
+- `getAttachments(ctx)` lists trace attachments with per-trace attachment IDs.
+- `extractAttachment(ctx, attachmentId, outputPath?)` resolves and writes one attachment by its per-trace ID.
 - `extractScreenshots(ctx, outDir)` writes screencast frames to disk and returns metadata.
 - `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`.
 - `getTimeline(ctx)` merges step, screenshot, DOM, and network events into one chronological stream.
@@ -137,17 +142,21 @@ Main APIs:
 - `getSummary(ctx, options)` builds one `TraceSummary` for a single trace.
 - `getFailedTraceSelections(reportDataDir, options?)` selects the winning failed traces and pairs them with trace identity metadata.
 - `getFailedTestSummaries(reportDataDir, options?)` performs report-level failure analysis and retry deduplication.
+- `getReportFailurePatterns(reportDataDir, options?)` groups repeated failing requests and repeated correlated issues across unique failed traces.
+- `summarizeReportFailurePatterns(selections)` computes the same cross-trace pattern summary from already selected failures.
 
 Important current behavior:
 
-- `getSummary()` runs step extraction, network extraction, DOM extraction, and title extraction in parallel.
+- `getSummary()` runs step extraction, network extraction, DOM extraction, title extraction, and issue extraction in parallel.
 - `getSummary()` works for both passed and failed traces.
 - `getSummary()` filters hook roots out of `topLevelSteps`.
+- `getSummary()` includes `issues` and aggregated `actionDiagnostics` alongside step, network, and DOM data.
 - `getSummary()` uses report metadata when available to populate `outcome`.
 - `getFailedTestSummaries()` uses `getTopLevelFailures()` as a cheap pre-filter before building full summaries.
 - `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
 - `getFailedTestSummaries()` keeps the last retry by comparing the latest root-step end time.
 - `getFailedTraceSelections()` reuses the same retry-selection logic but returns both the selected trace identity (`tracePath`, `traceSha1`) and the rich `TraceSummary`.
+- `getReportFailurePatterns()` normalizes request URLs and issue messages so repeated failure signatures can be grouped across distinct traces.
 
 This is the main library interface for consumers that need analysis rather than raw events.
 
@@ -167,8 +176,13 @@ Command surface:
 - `slow-steps <tracePath>`
 - `steps <tracePath>`
 - `network <tracePath>`
+- `request <tracePath> <requestId>`
+- `console <tracePath>`
+- `errors <tracePath>`
 - `dom <tracePath>`
 - `timeline <tracePath>`
+- `attachments <tracePath>`
+- `attachment <tracePath> <attachmentId>`
 - `screenshots <tracePath> --out-dir <path>`
 
 Output modes:
@@ -186,8 +200,10 @@ Current CLI contract choices:
 
 - JSON is the default output mode for all commands.
 - `search-reports` and `prepare-report` are discovery commands that stop at local path resolution.
-- `failures` is intentionally compact and returns CLI-specific triage records.
-- `summary` remains the full deep-inspection payload for one trace.
+- `failures` is intentionally compact and returns CLI-specific triage records plus report-level repeated failure patterns.
+- `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics.
+- `network` is the listing surface for discovering per-trace `requestId` values later consumed by `request`.
+- `attachments` is the listing surface for discovering per-trace `attachmentId` values later consumed by `attachment`.
 
 ### Report-hub discovery flow
 
@@ -233,6 +249,15 @@ All command JSON payloads currently include:
 
 The `failures` command is intentionally compact at the CLI layer. It no longer returns full `TraceSummary` objects. Instead, it returns triage records with enough data to select one failure and call `summary <tracePath>` for full detail.
 
+The `failures` payload also includes grouped repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures.
+
+The `summary` payload is richer than the initial implementation and now includes:
+
+- `issues`
+- `actionDiagnostics`
+
+The `network` and `attachments` payloads expose per-trace numeric IDs that drive the `request` and `attachment` drilldown commands.
+
 This contract is documented separately in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md), but architecturally it matters because it creates a stable boundary for:
 
 - agents
@@ -265,7 +290,9 @@ Instead, the package now uses generated synthetic artifacts created at test runt
 - a `data/` directory with multiple trace entries
 - both extracted and zip-only traces
 - network resources and screenshot blobs
+- console, page-error, stdout/stderr, and attachment signals
 - passing, failing, skipped, and retry scenarios
+- repeated cross-trace failure patterns for aggregation tests
 
 This gives the test suite three benefits:
 
@@ -300,8 +327,21 @@ report root or report data dir
   -> getTopLevelFailures per trace
   -> retry grouping and skip filtering
   -> getSummary for winning traces only
-  -> compact failure records with tracePath and traceSha1
+  -> summarizeReportFailurePatterns
+  -> compact failure records with tracePath, traceSha1, and primary action context
+  -> repeated request and issue pattern groups
   -> optional CLI formatter or JSON envelope
+```
+
+### Request and attachment drilldown
+
+```text
+trace dir or trace zip
+  -> prepareTraceDir
+  -> network / attachments
+  -> choose per-trace requestId / attachmentId
+  -> request / attachment
+  -> detailed single-item payload or extracted artifact
 ```
 
 ### Hub-assisted report analysis

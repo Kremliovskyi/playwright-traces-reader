@@ -2,15 +2,21 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  extractAttachment,
   extractScreenshots,
+  getAttachments,
+  getConsoleEntries,
   getDomSnapshots,
   getFailedTestSummaries,
   getNetworkTraffic,
+  getNetworkRequest,
+  getReportFailurePatterns,
   getReportMetadata,
   getSummary,
   getTestSteps,
   getTestTitle,
   getTimeline,
+  getTraceIssues,
   getTopLevelFailures,
   listTraces,
   prepareTraceDir,
@@ -51,6 +57,7 @@ describe('playwright-traces-reader sanity', () => {
     expect(traceNames).toEqual([
       fixture.traces.failedEarlierZip.sha1,
       fixture.traces.failedLatest.sha1,
+      fixture.traces.failedPeer.sha1,
       fixture.traces.passed.sha1,
       fixture.traces.skipped.sha1,
     ].sort());
@@ -84,6 +91,59 @@ describe('playwright-traces-reader sanity', () => {
     expect(traffic.some(entry => entry.source === 'browser')).toBe(true);
     expect(traffic.some(entry => entry.source === 'api')).toBe(true);
     expect(traffic.find(entry => entry.source === 'api')!.responseBody).toContain('trace-fail-latest');
+    expect(traffic.every(entry => entry.relatedAction?.callId === fixture.traces.failedLatest.rootCallId)).toBe(true);
+  });
+
+  test('getNetworkTraffic supports filtering and getNetworkRequest returns one request by id', async () => {
+    const ctx = await prepareTraceDir(fixture.traces.failedLatest.tracePath);
+    const filtered = await getNetworkTraffic(ctx, {
+      source: 'api',
+      near: fixture.traces.failedLatest.rootCallId,
+    });
+
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.source).toBe('api');
+
+    const request = await getNetworkRequest(ctx, filtered[0]!.id);
+    expect(request.url).toContain('/api-call');
+    expect(request.relatedAction?.callId).toBe(fixture.traces.failedLatest.rootCallId);
+  });
+
+  test('getConsoleEntries returns browser console, page errors, and stdio entries', async () => {
+    const ctx = await prepareTraceDir(fixture.traces.failedLatest.tracePath);
+    const entries = await getConsoleEntries(ctx);
+
+    expect(entries.some(entry => entry.source === 'browser' && entry.level === 'info')).toBe(true);
+    expect(entries.some(entry => entry.source === 'browser' && entry.text.includes('page error'))).toBe(true);
+    expect(entries.some(entry => entry.source === 'stdout')).toBe(true);
+    expect(entries.some(entry => entry.source === 'stderr')).toBe(true);
+  });
+
+  test('getTraceIssues combines step failures, page errors, and trace-level errors', async () => {
+    const ctx = await prepareTraceDir(fixture.traces.failedLatest.tracePath);
+    const issues = await getTraceIssues(ctx);
+
+    expect(issues.some(issue => issue.source === 'step' && issue.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
+    expect(issues.some(issue => issue.source === 'page' && issue.message.includes('page error') && issue.relatedAction?.callId === fixture.traces.failedLatest.rootCallId)).toBe(true);
+    expect(issues.some(issue => issue.source === 'trace' && issue.message.includes('trace error'))).toBe(true);
+  });
+
+  test('getAttachments lists attachments and extractAttachment writes one to disk', async () => {
+    const ctx = await prepareTraceDir(fixture.traces.failedLatest.tracePath);
+    const attachments = await getAttachments(ctx);
+    const outPath = path.join(os.tmpdir(), 'pw-traces-reader-attachment', `${Date.now()}.txt`);
+
+    try {
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]!.actionTitle).toBe(fixture.traces.failedLatest.rootTitle);
+
+      const saved = await extractAttachment(ctx, attachments[0]!.id, outPath);
+      expect(saved.savedPath).toBe(outPath);
+      expect(fs.existsSync(saved.savedPath)).toBe(true);
+      expect(await fs.promises.readFile(saved.savedPath, 'utf8')).toContain('trace-fail-latest');
+    } finally {
+      await fs.promises.rm(path.dirname(outPath), { recursive: true, force: true });
+    }
   });
 
   test('extractScreenshots writes image files to disk', async () => {
@@ -158,6 +218,8 @@ describe('playwright-traces-reader sanity', () => {
     expect(summary.title).toBe(fixture.traces.failedLatest.rootTitle);
     expect(summary.topLevelSteps).toHaveLength(1);
     expect(summary.topLevelSteps[0]!.title).toBe(fixture.traces.failedLatest.rootTitle);
+    expect(summary.issues.some(issue => issue.relatedAction?.callId === fixture.traces.failedLatest.rootCallId)).toBe(true);
+    expect(summary.actionDiagnostics[0]!.action.callId).toBe(fixture.traces.failedLatest.rootCallId);
     expect(summary.failureDomSnapshot?.callId).toBe(fixture.traces.failedLatest.rootCallId);
   });
 
@@ -176,12 +238,22 @@ describe('playwright-traces-reader sanity', () => {
     const allFailures = await getFailedTestSummaries(fixture.dataDir);
     const unexpectedOnly = await getFailedTestSummaries(fixture.dataDir, { excludeSkipped: true });
 
-    expect(allFailures).toHaveLength(2);
+    expect(allFailures).toHaveLength(3);
     expect(allFailures.some(summary => summary.outcome === 'skipped')).toBe(true);
     expect(allFailures.some(summary => summary.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
+    expect(allFailures.some(summary => summary.title === fixture.traces.failedPeer.rootTitle)).toBe(true);
 
-    expect(unexpectedOnly).toHaveLength(1);
-    expect(unexpectedOnly[0]!.outcome).toBe('unexpected');
-    expect(unexpectedOnly[0]!.title).toBe(fixture.traces.failedLatest.rootTitle);
+    expect(unexpectedOnly).toHaveLength(2);
+    expect(unexpectedOnly.every(summary => summary.outcome === 'unexpected')).toBe(true);
+    expect(unexpectedOnly.some(summary => summary.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
+    expect(unexpectedOnly.some(summary => summary.title === fixture.traces.failedPeer.rootTitle)).toBe(true);
+  });
+
+  test('getReportFailurePatterns groups repeated failing requests and correlated issues across unique failures', async () => {
+    const patterns = await getReportFailurePatterns(fixture.dataDir, { excludeSkipped: true });
+
+    expect(patterns.repeatedFailingRequests.some(pattern => pattern.signature === 'GET /:id/browser-call' && pattern.count === 2)).toBe(true);
+    expect(patterns.repeatedFailingRequests.some(pattern => pattern.signature === 'POST /:id/api-call' && pattern.count === 2)).toBe(true);
+    expect(patterns.repeatedIssues.some(pattern => pattern.source === 'page' && pattern.count === 2)).toBe(true);
   });
 });

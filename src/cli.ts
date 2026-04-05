@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
 import {
+  extractAttachment,
   extractScreenshots,
+  getAttachments,
+  getConsoleEntries,
   getDomSnapshots,
+  getNetworkRequest,
+  getTraceIssues,
   getNetworkTraffic,
   getSummary,
   getTestSteps,
+  summarizeReportFailurePatterns,
   getTimeline,
   prepareTraceDir,
 } from './index';
@@ -21,9 +27,14 @@ import {
 } from './cli/helpers';
 import {
   emitOutput,
+  formatAttachmentText,
+  formatAttachmentsText,
+  formatConsoleText,
   formatPrepareReportText,
+  formatRequestText,
   formatSearchReportsText,
   formatDomSnapshotsText,
+  formatErrorsText,
   formatFailuresText,
   formatInitSkillsText,
   formatNetworkText,
@@ -37,8 +48,13 @@ import {
 import {
   createInitSkillsCommandJson,
   createPrepareReportCommandJson,
+  createAttachmentCommandJson,
+  createAttachmentsCommandJson,
+  createConsoleCommandJson,
+  createRequestCommandJson,
   createSearchReportsCommandJson,
   createDomCommandJson,
+  createErrorsCommandJson,
   createFailuresCommandJson,
   createNetworkCommandJson,
   createScreenshotsCommandJson,
@@ -159,6 +175,7 @@ function buildProgram(io: CliIo): Command {
       const selections = await getFailedTraceSelections(reportDataDir, {
         excludeSkipped: options.excludeSkipped,
       });
+      const patterns = summarizeReportFailurePatterns(selections);
 
       const failures: FailureListItem[] = selections.map(selection => {
         const errorMessage = firstLine(selection.summary.error?.message);
@@ -175,11 +192,14 @@ function buildProgram(io: CliIo): Command {
           traceSha1: selection.traceSha1,
           networkCallCount: selection.summary.networkCalls.length,
           networkErrorCount,
+          issueCount: selection.summary.issues.length,
+          correlatedActionCount: selection.summary.actionDiagnostics.length,
+          primaryRelatedAction: selection.summary.actionDiagnostics[0] ?? null,
           hasFailureDomSnapshot: selection.summary.failureDomSnapshot !== null,
         };
       });
 
-      emitOutput(io, options.format, createFailuresCommandJson(failures), formatFailuresText(failures));
+      emitOutput(io, options.format, createFailuresCommandJson(failures, patterns), formatFailuresText(failures, patterns));
     });
 
   program
@@ -226,18 +246,119 @@ function buildProgram(io: CliIo): Command {
     .description('Inspect network traffic for a single trace')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--source <source>', 'Filter by source: all, api, or browser', 'all')
-    .action(async (tracePath: string, options: { format: OutputFormat; source: string }) => {
+    .option('--grep <pattern>', 'Filter requests by URL pattern')
+    .option('--method <method>', 'Filter requests by HTTP method')
+    .option('--status <code>', 'Filter requests by HTTP status code')
+    .option('--failed', 'Only include failed requests (status >= 400)', false)
+    .option('--near <callId>', 'Only include requests correlated to a specific action callId')
+    .option('-n, --limit <count>', 'Maximum number of requests to return', parsePositiveInteger)
+    .action(async (
+      tracePath: string,
+      options: {
+        format: OutputFormat;
+        source: string;
+        grep?: string;
+        method?: string;
+        status?: string;
+        failed: boolean;
+        near?: string;
+        limit?: number;
+      },
+    ) => {
       if (!['all', 'api', 'browser'].includes(options.source)) {
         throw new Error(`Invalid source: ${options.source}. Expected all, api, or browser.`);
       }
 
       const traceContext = await prepareTraceDir(tracePath);
-      const networkEntries = await getNetworkTraffic(traceContext);
-      const filteredEntries = options.source === 'all'
-        ? networkEntries
-        : networkEntries.filter(entry => entry.source === options.source);
+      const filters = {
+        source: options.source as 'all' | 'api' | 'browser',
+        ...(options.grep ? { grep: options.grep } : {}),
+        ...(options.method ? { method: options.method } : {}),
+        ...(options.status ? { status: Number.parseInt(options.status, 10) } : {}),
+        ...(options.failed ? { failed: true } : {}),
+        ...(options.near ? { near: options.near } : {}),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      };
+      const filteredEntries = await getNetworkTraffic(traceContext, filters);
 
       emitOutput(io, options.format, createNetworkCommandJson(filteredEntries), formatNetworkText(filteredEntries));
+    });
+
+  program
+    .command('request <tracePath> <requestId>')
+    .description('Inspect a single network request in detail by its request ID')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .action(async (tracePath: string, requestId: string, options: { format: OutputFormat }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const request = await getNetworkRequest(traceContext, parsePositiveInteger(requestId));
+
+      emitOutput(io, options.format, createRequestCommandJson(request), formatRequestText(request));
+    });
+
+  program
+    .command('console <tracePath>')
+    .description('Inspect console, page error, stdout, and stderr entries for a single trace')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('--errors-only', 'Only include error-level entries', false)
+    .option('--warnings', 'Only include warnings and errors for browser console, plus stderr', false)
+    .option('--browser', 'Only include browser console and page errors', false)
+    .option('--stdio', 'Only include stdout and stderr', false)
+    .action(async (
+      tracePath: string,
+      options: { format: OutputFormat; errorsOnly: boolean; warnings: boolean; browser: boolean; stdio: boolean },
+    ) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      let entries = await getConsoleEntries(traceContext);
+
+      if (options.browser)
+        entries = entries.filter(entry => entry.source === 'browser');
+      if (options.stdio)
+        entries = entries.filter(entry => entry.source !== 'browser');
+      if (options.errorsOnly)
+        entries = entries.filter(entry => entry.level === 'error');
+      else if (options.warnings)
+        entries = entries.filter(entry => entry.source !== 'browser' || entry.level === 'warning' || entry.level === 'error');
+
+      emitOutput(io, options.format, createConsoleCommandJson(entries), formatConsoleText(entries));
+    });
+
+  program
+    .command('errors <tracePath>')
+    .description('Inspect failed steps, page errors, and trace-level issues for a single trace')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .action(async (tracePath: string, options: { format: OutputFormat }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const errors = await getTraceIssues(traceContext);
+
+      emitOutput(io, options.format, createErrorsCommandJson(errors), formatErrorsText(errors));
+    });
+
+  program
+    .command('attachments <tracePath>')
+    .description('List attachments captured in a single trace')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .action(async (tracePath: string, options: { format: OutputFormat }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const attachments = await getAttachments(traceContext);
+
+      emitOutput(io, options.format, createAttachmentsCommandJson(attachments), formatAttachmentsText(attachments));
+    });
+
+  program
+    .command('attachment <tracePath> <attachmentId>')
+    .description('Extract one attachment from a single trace by its attachment ID')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('-o, --output <path>', 'Optional output file path')
+    .action(async (
+      tracePath: string,
+      attachmentId: string,
+      options: { format: OutputFormat; output?: string },
+    ) => {
+      const parsedId = parsePositiveInteger(attachmentId);
+      const traceContext = await prepareTraceDir(tracePath);
+      const attachment = await extractAttachment(traceContext, parsedId, options.output);
+
+      emitOutput(io, options.format, createAttachmentCommandJson(attachment), formatAttachmentText(attachment));
     });
 
   program

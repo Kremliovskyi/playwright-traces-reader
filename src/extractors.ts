@@ -29,7 +29,9 @@ export interface TraceError {
 }
 
 export interface NetworkEntry {
+  id: number;
   source: 'browser' | 'api';
+  pageId: string | null;
   method: string;
   url: string;
   status: number;
@@ -41,6 +43,109 @@ export interface NetworkEntry {
   mimeType: string;
   startedDateTime: string;
   durationMs: number;
+  relatedAction: RelatedActionRef | null;
+}
+
+export interface RelatedActionRef {
+  callId: string;
+  title: string;
+  method: string;
+  pageId: string | null;
+  startTime: number;
+  endTime: number | null;
+}
+
+export interface ActionDiagnosticSummary {
+  action: RelatedActionRef;
+  networkCallCount: number;
+  failingNetworkCallCount: number;
+  issueCount: number;
+}
+
+export interface ConsoleEntry {
+  source: 'browser' | 'stdout' | 'stderr';
+  level: string;
+  text: string;
+  timestamp: number;
+  pageId: string | null;
+  location: {
+    url: string;
+    lineNumber: number;
+    columnNumber: number;
+  } | null;
+}
+
+export interface TraceIssue {
+  source: 'step' | 'page' | 'trace';
+  message: string;
+  name: string | null;
+  stack: string | null;
+  timestamp: number | null;
+  callId: string | null;
+  title: string | null;
+  location: {
+    file: string;
+    line: number;
+    column: number;
+  } | null;
+  relatedAction: RelatedActionRef | null;
+}
+
+export interface RepeatedFailingRequestPattern {
+  signature: string;
+  method: string;
+  url: string;
+  count: number;
+  traceSha1s: string[];
+  statuses: number[];
+  relatedActions: Array<{
+    callId: string;
+    title: string;
+  }>;
+}
+
+export interface RepeatedIssuePattern {
+  signature: string;
+  source: TraceIssue['source'];
+  name: string | null;
+  message: string;
+  count: number;
+  traceSha1s: string[];
+  relatedActions: Array<{
+    callId: string;
+    title: string;
+  }>;
+}
+
+export interface ReportFailurePatterns {
+  repeatedFailingRequests: RepeatedFailingRequestPattern[];
+  repeatedIssues: RepeatedIssuePattern[];
+}
+
+export interface NetworkFilterOptions {
+  source?: 'all' | 'browser' | 'api';
+  grep?: string;
+  method?: string;
+  status?: number;
+  failed?: boolean;
+  near?: string;
+  limit?: number;
+}
+
+export interface AttachmentEntry {
+  id: number;
+  callId: string;
+  actionTitle: string | null;
+  name: string;
+  contentType: string;
+  path: string | null;
+  sha1: string | null;
+  base64: string | null;
+  size: number | null;
+}
+
+export interface SavedAttachment extends AttachmentEntry {
+  savedPath: string;
 }
 
 export interface Screenshot {
@@ -85,6 +190,57 @@ interface TraceEventAfter {
   endTime: number;
   annotations?: Array<{ type: string; description?: string }>;
   error?: TraceError;
+  attachments?: Array<{
+    name: string;
+    contentType: string;
+    path?: string;
+    sha1?: string;
+    base64?: string;
+  }>;
+}
+
+interface TraceEventConsole {
+  type: 'console';
+  time: number;
+  pageId?: string;
+  messageType: string;
+  text: string;
+  location: {
+    url: string;
+    lineNumber: number;
+    columnNumber: number;
+  };
+}
+
+interface TraceEventStdio {
+  type: 'stdout' | 'stderr';
+  timestamp: number;
+  text?: string;
+  base64?: string;
+}
+
+interface TraceEventPageError {
+  type: 'event';
+  time: number;
+  class: string;
+  method: string;
+  params: {
+    error?: {
+      error?: {
+        name?: string;
+        message?: string;
+        stack?: string;
+      };
+      value?: unknown;
+    };
+  };
+  pageId?: string;
+}
+
+interface TraceEventError {
+  type: 'error';
+  message: string;
+  stack?: Array<{ file: string; line: number; column: number }>;
 }
 
 interface TraceEventScreencast {
@@ -122,6 +278,22 @@ interface ResourceSnapshot {
       };
     };
   };
+}
+
+interface TraceActionBeforeEvent {
+  type: 'before';
+  callId: string;
+  startTime: number;
+  title?: string;
+  class: string;
+  method: string;
+  pageId?: string;
+}
+
+interface TraceActionAfterEvent {
+  type: 'after';
+  callId: string;
+  endTime: number;
 }
 
 // ---------- getTestSteps ----------
@@ -202,8 +374,9 @@ export async function getTopLevelFailures(traceContext: TraceContext): Promise<T
  * 'api' (has _apiRequest, no pageref). Response and request bodies are
  * resolved from the resources/ directory when a _sha1 reference exists.
  */
-export async function getNetworkTraffic(traceContext: TraceContext): Promise<NetworkEntry[]> {
+export async function getNetworkTraffic(traceContext: TraceContext, options?: NetworkFilterOptions): Promise<NetworkEntry[]> {
   const entries: NetworkEntry[] = [];
+  const actions = await getBrowserActions(traceContext);
 
   const files = await fs.promises.readdir(traceContext.traceDir);
   const networkFiles = files.filter(f => f.endsWith('.network')).sort();
@@ -248,7 +421,9 @@ export async function getNetworkTraffic(traceContext: TraceContext): Promise<Net
       }
 
       entries.push({
+        id: entries.length + 1,
         source,
+        pageId: snap.pageref ?? null,
         method: snap.request.method,
         url: snap.request.url,
         status: snap.response.status,
@@ -260,11 +435,214 @@ export async function getNetworkTraffic(traceContext: TraceContext): Promise<Net
         mimeType: content.mimeType,
         startedDateTime: snap.startedDateTime,
         durationMs: snap.time,
+        relatedAction: correlateAction(actions, new Date(snap.startedDateTime).getTime(), snap.pageref ?? null),
       });
     }
   }
 
+  return filterNetworkEntries(entries, options);
+}
+
+export async function getNetworkRequest(traceContext: TraceContext, requestId: number): Promise<NetworkEntry> {
+  const entries = await getNetworkTraffic(traceContext);
+  const entry = entries.find(candidate => candidate.id === requestId);
+  if (!entry)
+    throw new Error(`Request '${requestId}' not found.`);
+  return entry;
+}
+
+// ---------- getConsoleEntries ----------
+
+export async function getConsoleEntries(traceContext: TraceContext): Promise<ConsoleEntry[]> {
+  const entries: ConsoleEntry[] = [];
+  const files = await fs.promises.readdir(traceContext.traceDir);
+  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+
+  for (const traceFile of traceFiles) {
+    const filePath = path.join(traceContext.traceDir, traceFile);
+    for await (const event of readNdjson<TraceEventConsole | TraceEventPageError | TraceEventStdio>(filePath)) {
+      if (event.type === 'console') {
+        entries.push({
+          source: 'browser',
+          level: event.messageType,
+          text: event.text,
+          timestamp: event.time,
+          pageId: event.pageId ?? null,
+          location: event.location,
+        });
+        continue;
+      }
+
+      if (event.type === 'event' && event.method === 'pageError') {
+        const text = event.params.error?.error?.message ?? String(event.params.error?.value ?? '');
+        if (!text)
+          continue;
+        entries.push({
+          source: 'browser',
+          level: 'error',
+          text,
+          timestamp: event.time,
+          pageId: event.pageId ?? null,
+          location: null,
+        });
+        continue;
+      }
+
+      if (event.type === 'stdout' || event.type === 'stderr') {
+        let text = event.text?.trim() ?? '';
+        if (!text && event.base64)
+          text = Buffer.from(event.base64, 'base64').toString('utf8').trim();
+        if (!text)
+          continue;
+        entries.push({
+          source: event.type,
+          level: event.type === 'stderr' ? 'error' : 'info',
+          text,
+          timestamp: event.timestamp,
+          pageId: null,
+          location: null,
+        });
+      }
+    }
+  }
+
+  entries.sort((a, b) => a.timestamp - b.timestamp);
   return entries;
+}
+
+// ---------- getTraceIssues ----------
+
+export async function getTraceIssues(traceContext: TraceContext): Promise<TraceIssue[]> {
+  const issues: TraceIssue[] = [];
+  const actions = await getBrowserActions(traceContext);
+  const steps = await getTestSteps(traceContext);
+
+  for (const step of flattenSteps(steps)) {
+    if (!step.error)
+      continue;
+    issues.push({
+      source: 'step',
+      message: step.error.message,
+      name: step.error.name,
+      stack: step.error.stack ?? null,
+      timestamp: step.endTime ?? step.startTime,
+      callId: step.callId,
+      title: step.title,
+      location: null,
+      relatedAction: resolveIssueRelatedAction(actions, step.callId, step.endTime ?? step.startTime, null),
+    });
+  }
+
+  const files = await fs.promises.readdir(traceContext.traceDir);
+  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+
+  for (const traceFile of traceFiles) {
+    const filePath = path.join(traceContext.traceDir, traceFile);
+    for await (const event of readNdjson<TraceEventError | TraceEventPageError>(filePath)) {
+      if (event.type === 'error') {
+        const firstFrame = event.stack?.[0];
+        issues.push({
+          source: 'trace',
+          message: event.message,
+          name: 'TraceError',
+          stack: formatStackFrames(event.stack),
+          timestamp: null,
+          callId: null,
+          title: null,
+          location: firstFrame ? { file: firstFrame.file, line: firstFrame.line, column: firstFrame.column } : null,
+          relatedAction: null,
+        });
+        continue;
+      }
+
+      if (event.type === 'event' && event.method === 'pageError') {
+        const pageError = event.params.error?.error;
+        const message = pageError?.message ?? String(event.params.error?.value ?? '');
+        if (!message)
+          continue;
+        issues.push({
+          source: 'page',
+          message,
+          name: pageError?.name ?? 'PageError',
+          stack: pageError?.stack ?? null,
+          timestamp: event.time,
+          callId: null,
+          title: null,
+          location: null,
+          relatedAction: resolveIssueRelatedAction(actions, null, event.time, event.pageId ?? null),
+        });
+      }
+    }
+  }
+
+  issues.sort((a, b) => {
+    if (a.timestamp === null && b.timestamp === null)
+      return 0;
+    if (a.timestamp === null)
+      return 1;
+    if (b.timestamp === null)
+      return -1;
+    return a.timestamp - b.timestamp;
+  });
+
+  return issues;
+}
+
+// ---------- getAttachments ----------
+
+export async function getAttachments(traceContext: TraceContext): Promise<AttachmentEntry[]> {
+  const files = await fs.promises.readdir(traceContext.traceDir);
+  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+  const actionTitleByCallId = new Map<string, string>();
+  const attachments: AttachmentEntry[] = [];
+
+  for (const traceFile of traceFiles) {
+    const filePath = path.join(traceContext.traceDir, traceFile);
+    for await (const event of readNdjson<TraceEventBefore | TraceEventAfter>(filePath)) {
+      if (event.type === 'before') {
+        actionTitleByCallId.set(event.callId, event.title);
+        continue;
+      }
+
+      if (event.type !== 'after' || !event.attachments?.length)
+        continue;
+
+      for (const attachment of event.attachments) {
+        attachments.push({
+          id: attachments.length + 1,
+          callId: event.callId,
+          actionTitle: actionTitleByCallId.get(event.callId) ?? null,
+          name: attachment.name,
+          contentType: attachment.contentType,
+          path: attachment.path ?? null,
+          sha1: attachment.sha1 ?? null,
+          base64: attachment.base64 ?? null,
+          size: await attachmentSize(traceContext, attachment),
+        });
+      }
+    }
+  }
+
+  return attachments;
+}
+
+export async function extractAttachment(traceContext: TraceContext, attachmentId: number, outputPath?: string): Promise<SavedAttachment> {
+  const attachments = await getAttachments(traceContext);
+  const attachment = attachments.find(entry => entry.id === attachmentId);
+  if (!attachment)
+    throw new Error(`Attachment '${attachmentId}' not found.`);
+
+  const content = await attachmentContent(traceContext, attachment);
+  if (!content)
+    throw new Error(`Could not extract attachment '${attachmentId}'.`);
+
+  const savedPath = outputPath ?? path.join(process.cwd(), path.basename(attachment.name));
+  await fs.promises.mkdir(path.dirname(savedPath), { recursive: true });
+  await fs.promises.writeFile(savedPath, content);
+  return {
+    ...attachment,
+    savedPath,
+  };
 }
 
 // ---------- extractScreenshots ----------
@@ -692,6 +1070,336 @@ function flattenSteps(steps: TestStep[]): TestStep[] {
   return out;
 }
 
+function buildActionDiagnostics(networkCalls: NetworkEntry[], issues: TraceIssue[]): ActionDiagnosticSummary[] {
+  const byCallId = new Map<string, ActionDiagnosticSummary>();
+
+  const ensure = (action: RelatedActionRef): ActionDiagnosticSummary => {
+    const existing = byCallId.get(action.callId);
+    if (existing)
+      return existing;
+
+    const created: ActionDiagnosticSummary = {
+      action,
+      networkCallCount: 0,
+      failingNetworkCallCount: 0,
+      issueCount: 0,
+    };
+    byCallId.set(action.callId, created);
+    return created;
+  };
+
+  for (const entry of networkCalls) {
+    if (!entry.relatedAction)
+      continue;
+    const bucket = ensure(entry.relatedAction);
+    bucket.networkCallCount += 1;
+    if (entry.status >= 400)
+      bucket.failingNetworkCallCount += 1;
+  }
+
+  for (const issue of issues) {
+    if (!issue.relatedAction)
+      continue;
+    ensure(issue.relatedAction).issueCount += 1;
+  }
+
+  return [...byCallId.values()].sort((left, right) => {
+    const leftScore = left.failingNetworkCallCount * 10 + left.issueCount * 5 + left.networkCallCount;
+    const rightScore = right.failingNetworkCallCount * 10 + right.issueCount * 5 + right.networkCallCount;
+    return rightScore - leftScore;
+  });
+}
+
+function buildReportFailurePatterns(selections: FailedTraceSelection[]): ReportFailurePatterns {
+  const realFailures = selections.filter(selection => selection.summary.outcome !== 'skipped');
+  const repeatedFailingRequests = new Map<string, {
+    method: string;
+    url: string;
+    traces: Set<string>;
+    statuses: Set<number>;
+    relatedActions: Map<string, { callId: string; title: string }>;
+  }>();
+  const repeatedIssues = new Map<string, {
+    source: TraceIssue['source'];
+    name: string | null;
+    message: string;
+    traces: Set<string>;
+    relatedActions: Map<string, { callId: string; title: string }>;
+  }>();
+
+  for (const selection of realFailures) {
+    for (const entry of selection.summary.networkCalls) {
+      if (entry.status < 400)
+        continue;
+
+      const signature = buildRequestPatternSignature(entry);
+      const bucket = repeatedFailingRequests.get(signature) ?? {
+        method: entry.method,
+        url: stripQuery(entry.url),
+        traces: new Set<string>(),
+        statuses: new Set<number>(),
+        relatedActions: new Map<string, { callId: string; title: string }>(),
+      };
+
+      bucket.traces.add(selection.traceSha1);
+      bucket.statuses.add(entry.status);
+      if (entry.relatedAction)
+        bucket.relatedActions.set(entry.relatedAction.callId, { callId: entry.relatedAction.callId, title: entry.relatedAction.title });
+      repeatedFailingRequests.set(signature, bucket);
+    }
+
+    for (const issue of selection.summary.issues) {
+      if (!issue.relatedAction)
+        continue;
+
+      const signature = buildIssuePatternSignature(issue);
+      const bucket = repeatedIssues.get(signature) ?? {
+        source: issue.source,
+        name: issue.name,
+        message: firstLine(issue.message) ?? issue.message,
+        traces: new Set<string>(),
+        relatedActions: new Map<string, { callId: string; title: string }>(),
+      };
+
+      bucket.traces.add(selection.traceSha1);
+      bucket.relatedActions.set(issue.relatedAction.callId, { callId: issue.relatedAction.callId, title: issue.relatedAction.title });
+      repeatedIssues.set(signature, bucket);
+    }
+  }
+
+  return {
+    repeatedFailingRequests: [...repeatedFailingRequests.entries()]
+      .map(([signature, bucket]) => ({
+        signature,
+        method: bucket.method,
+        url: bucket.url,
+        count: bucket.traces.size,
+        traceSha1s: [...bucket.traces].sort(),
+        statuses: [...bucket.statuses].sort((left, right) => left - right),
+        relatedActions: [...bucket.relatedActions.values()],
+      }))
+      .filter(pattern => pattern.count > 1)
+      .sort((left, right) => right.count - left.count),
+    repeatedIssues: [...repeatedIssues.entries()]
+      .map(([signature, bucket]) => ({
+        signature,
+        source: bucket.source,
+        name: bucket.name,
+        message: bucket.message,
+        count: bucket.traces.size,
+        traceSha1s: [...bucket.traces].sort(),
+        relatedActions: [...bucket.relatedActions.values()],
+      }))
+      .filter(pattern => pattern.count > 1)
+      .sort((left, right) => right.count - left.count),
+  };
+}
+
+async function attachmentSize(
+  traceContext: TraceContext,
+  attachment: { sha1?: string; base64?: string; path?: string }
+): Promise<number | null> {
+  if (attachment.sha1) {
+    const buffer = await getResourceBuffer(traceContext, attachment.sha1);
+    if (buffer)
+      return buffer.length;
+  }
+
+  if (attachment.base64)
+    return Buffer.from(attachment.base64, 'base64').length;
+
+  if (attachment.path && fs.existsSync(attachment.path)) {
+    const stat = await fs.promises.stat(attachment.path);
+    return stat.size;
+  }
+
+  return null;
+}
+
+async function attachmentContent(traceContext: TraceContext, attachment: AttachmentEntry): Promise<Buffer | null> {
+  if (attachment.sha1) {
+    const buffer = await getResourceBuffer(traceContext, attachment.sha1);
+    if (buffer)
+      return buffer;
+  }
+
+  if (attachment.base64)
+    return Buffer.from(attachment.base64, 'base64');
+
+  if (attachment.path && fs.existsSync(attachment.path))
+    return fs.promises.readFile(attachment.path);
+
+  return null;
+}
+
+function formatStackFrames(stack?: Array<{ file: string; line: number; column: number }>): string | null {
+  if (!stack?.length)
+    return null;
+  return stack.map(frame => `at ${frame.file}:${frame.line}:${frame.column}`).join('\n');
+}
+
+async function getBrowserActions(traceContext: TraceContext): Promise<RelatedActionRef[]> {
+  const files = await fs.promises.readdir(traceContext.traceDir);
+  const traceFiles = files.filter(f => /^\d+-trace\.trace$/.test(f)).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+  const actions = new Map<string, RelatedActionRef>();
+
+  for (const traceFile of traceFiles) {
+    const filePath = path.join(traceContext.traceDir, traceFile);
+    for await (const event of readNdjson<TraceActionBeforeEvent | TraceActionAfterEvent>(filePath)) {
+      if (event.type === 'before') {
+        actions.set(event.callId, {
+          callId: event.callId,
+          title: event.title ?? `${event.class}.${event.method}`,
+          method: event.method,
+          pageId: event.pageId ?? null,
+          startTime: event.startTime,
+          endTime: null,
+        });
+        continue;
+      }
+
+      if (event.type === 'after') {
+        const action = actions.get(event.callId);
+        if (action)
+          action.endTime = event.endTime;
+      }
+    }
+  }
+
+  return [...actions.values()].sort((a, b) => a.startTime - b.startTime);
+}
+
+function correlateAction(actions: RelatedActionRef[], timestamp: number, pageId: string | null): RelatedActionRef | null {
+  let best: RelatedActionRef | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const action of actions) {
+    if (pageId && action.pageId && action.pageId !== pageId)
+      continue;
+
+    const endTime = action.endTime ?? action.startTime;
+    const withinWindow = timestamp >= action.startTime && timestamp <= endTime;
+    const distance = withinWindow ? 0 : Math.min(
+      Math.abs(timestamp - action.startTime),
+      Math.abs(timestamp - endTime),
+    );
+
+    if (distance < bestDistance) {
+      best = action;
+      bestDistance = distance;
+    }
+  }
+
+  return best;
+}
+
+function resolveIssueRelatedAction(
+  actions: RelatedActionRef[],
+  callId: string | null,
+  timestamp: number,
+  pageId: string | null,
+): RelatedActionRef | null {
+  if (callId) {
+    const directMatch = actions.find(action => action.callId === callId);
+    if (directMatch)
+      return directMatch;
+  }
+
+  return correlateAction(actions, timestamp, pageId);
+}
+
+function filterNetworkEntries(entries: NetworkEntry[], options?: NetworkFilterOptions): NetworkEntry[] {
+  if (!options)
+    return entries;
+
+  let filtered = entries;
+
+  if (options.source && options.source !== 'all')
+    filtered = filtered.filter(entry => entry.source === options.source);
+
+  if (options.grep) {
+    const pattern = new RegExp(options.grep, 'i');
+    filtered = filtered.filter(entry => pattern.test(entry.url));
+  }
+
+  if (options.method)
+    filtered = filtered.filter(entry => entry.method.toLowerCase() === options.method!.toLowerCase());
+
+  if (options.status !== undefined)
+    filtered = filtered.filter(entry => entry.status === options.status);
+
+  if (options.failed)
+    filtered = filtered.filter(entry => entry.status >= 400);
+
+  if (options.near)
+    filtered = filtered.filter(entry => entry.relatedAction?.callId === options.near);
+
+  if (options.limit !== undefined)
+    filtered = filtered.slice(0, options.limit);
+
+  return filtered;
+}
+
+function buildRequestPatternSignature(entry: NetworkEntry): string {
+  try {
+    const parsed = new URL(entry.url);
+    return `${entry.method.toUpperCase()} ${normalizePathname(parsed.pathname)}`;
+  } catch {
+    return `${entry.method.toUpperCase()} ${entry.url}`;
+  }
+}
+
+function buildIssuePatternSignature(issue: TraceIssue): string {
+  return [
+    issue.source,
+    issue.name ?? 'Error',
+    normalizeIssueMessage(firstLine(issue.message) ?? issue.message),
+  ].join(' | ');
+}
+
+function normalizePathname(pathname: string): string {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length === 0)
+    return '/';
+
+  return `/${segments.map(normalizePathSegment).join('/')}`;
+}
+
+function normalizePathSegment(segment: string): string {
+  if (/^\d+$/.test(segment))
+    return ':id';
+  if (/^[0-9a-f]{8,}$/i.test(segment))
+    return ':id';
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment))
+    return ':id';
+  if (/^trace-[\w-]+$/i.test(segment))
+    return ':id';
+  return segment;
+}
+
+function normalizeIssueMessage(message: string): string {
+  return message
+    .replace(/trace-[\w-]+/gi, ':trace')
+    .replace(/call@[\w-]+/gi, 'call@:id')
+    .replace(/\b[0-9a-f]{8,}\b/gi, ':id')
+    .replace(/\b\d+\b/g, ':n');
+}
+
+function stripQuery(urlText: string): string {
+  try {
+    const parsed = new URL(urlText);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return urlText;
+  }
+}
+
+function firstLine(value?: string | null): string | null {
+  return value ? value.split(/\r?\n/, 1)[0] ?? null : null;
+}
+
 // ---------- getTimeline ----------
 
 /**
@@ -822,6 +1530,10 @@ export interface TraceSummary {
   slowestSteps: TestStep[];
   /** All HTTP calls (both Node.js APIRequestContext and browser XHR/fetch/navigation). */
   networkCalls: NetworkEntry[];
+  /** Step, page, and trace issues captured for the trace. */
+  issues: TraceIssue[];
+  /** Aggregated diagnostics per related browser action. */
+  actionDiagnostics: ActionDiagnosticSummary[];
   /** The DOM snapshot (before/action/after) closest in time to the failure, or null if passed. */
   failureDomSnapshot: ActionDomSnapshots | null;
   /**
@@ -863,11 +1575,12 @@ export interface GetSummaryOptions {
  * getNetworkTraffic(), and getDomSnapshots().
  */
 export async function getSummary(traceContext: TraceContext, options: GetSummaryOptions): Promise<TraceSummary> {
-  const [roots, network, domAll, testTitle] = await Promise.all([
+  const [roots, network, domAll, testTitle, issues] = await Promise.all([
     getTestSteps(traceContext),
     getNetworkTraffic(traceContext),
     getDomSnapshots(traceContext),
     getTestTitle(traceContext),
+    getTraceIssues(traceContext),
   ]);
 
   // Infrastructure steps injected by Playwright — not meaningful test content.
@@ -906,6 +1619,7 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
     .slice(0, 5);
 
   const networkCalls = network;
+  const actionDiagnostics = buildActionDiagnostics(networkCalls, issues);
 
   let failureDomSnapshot: ActionDomSnapshots | null = null;
   if (error && mainRoot && domAll.length > 0) {
@@ -926,6 +1640,8 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
     topLevelSteps,
     slowestSteps,
     networkCalls,
+    issues,
+    actionDiagnostics,
     failureDomSnapshot,
     outcome: options.reportMetadata
       ? (options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata)).outcomeByTraceSha1.get(path.basename(traceContext.traceDir)) as TraceSummary['outcome'] ?? null
@@ -964,6 +1680,18 @@ export interface FailedTraceSelection {
   tracePath: string;
   traceSha1: string;
   summary: TraceSummary;
+}
+
+export async function getReportFailurePatterns(
+  reportDataDir: string,
+  options?: GetFailedTestSummariesOptions,
+): Promise<ReportFailurePatterns> {
+  const selections = await getFailedTraceSelections(reportDataDir, options);
+  return buildReportFailurePatterns(selections);
+}
+
+export function summarizeReportFailurePatterns(selections: FailedTraceSelection[]): ReportFailurePatterns {
+  return buildReportFailurePatterns(selections);
 }
 
 export async function getFailedTraceSelections(

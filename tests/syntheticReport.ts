@@ -32,6 +32,7 @@ export interface SyntheticReportFixture {
   traces: {
     failedEarlierZip: SyntheticTraceRef;
     failedLatest: SyntheticTraceRef;
+    failedPeer: SyntheticTraceRef;
     passed: SyntheticTraceRef;
     skipped: SyntheticTraceRef;
   };
@@ -63,6 +64,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
   const childCallId = `assert@${spec.sha1}`;
   const screenshotSha1 = `${spec.sha1}-screen.jpeg`;
   const responseSha1 = `${spec.sha1}-response.json`;
+  const attachmentSha1 = `${spec.sha1}-attachment.txt`;
   const browserUrl = `https://synthetic.example/${spec.sha1}`;
   const errorMessage = spec.skipped ? 'Test is skipped: synthetic skip' : `Synthetic failure for ${spec.sha1}`;
   const error = spec.outcome === 'expected'
@@ -72,6 +74,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
   await fs.promises.mkdir(resourcesDir, { recursive: true });
   await fs.promises.writeFile(path.join(resourcesDir, screenshotSha1), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await fs.promises.writeFile(path.join(resourcesDir, responseSha1), JSON.stringify({ ok: spec.outcome === 'expected', trace: spec.sha1 }));
+  await fs.promises.writeFile(path.join(resourcesDir, attachmentSha1), `attachment for ${spec.sha1}\n`);
 
   const testTraceEvents = [
     {
@@ -122,11 +125,29 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
       endTime: spec.endTime,
       error,
       annotations: spec.skipped ? [{ type: 'skip', description: 'synthetic skip' }] : [],
+      attachments: [
+        {
+          name: `artifact-${spec.sha1}.txt`,
+          contentType: 'text/plain',
+          sha1: attachmentSha1,
+        },
+      ],
     },
   ];
 
   const traceEvents = [
     { type: 'context-options', title: spec.fullTitle },
+    {
+      type: 'before',
+      callId: rootCallId,
+      startTime: spec.startTime + 90,
+      class: 'Locator',
+      method: 'click',
+      title: spec.outcome === 'expected' ? 'Click submit button' : 'Click failing submit button',
+      pageId: 'page@1',
+      params: {},
+      stack: [],
+    },
     {
       type: 'frame-snapshot',
       snapshot: {
@@ -183,6 +204,84 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
       height: 720,
       timestamp: spec.startTime + 150,
       frameSwapWallTime: spec.startTime + 150,
+    },
+    {
+      type: 'console',
+      time: spec.startTime + 160,
+      pageId: 'page@1',
+      messageType: 'info',
+      text: `info message ${spec.sha1}`,
+      location: {
+        url: `${browserUrl}/app.js`,
+        lineNumber: 12,
+        columnNumber: 4,
+      },
+    },
+    {
+      type: 'console',
+      time: spec.startTime + 165,
+      pageId: 'page@1',
+      messageType: 'warning',
+      text: `warning message ${spec.sha1}`,
+      location: {
+        url: `${browserUrl}/app.js`,
+        lineNumber: 14,
+        columnNumber: 2,
+      },
+    },
+    {
+      type: 'console',
+      time: spec.startTime + 170,
+      pageId: 'page@1',
+      messageType: 'error',
+      text: `error message ${spec.sha1}`,
+      location: {
+        url: `${browserUrl}/app.js`,
+        lineNumber: 20,
+        columnNumber: 1,
+      },
+    },
+    {
+      type: 'event',
+      time: spec.startTime + 175,
+      class: 'BrowserContext',
+      method: 'pageError',
+      params: {
+        error: {
+          error: {
+            name: 'PageError',
+            message: `page error ${spec.sha1}`,
+            stack: `Error: page error ${spec.sha1}`,
+          },
+        },
+      },
+      pageId: 'page@1',
+    },
+    {
+      type: 'stdout',
+      timestamp: spec.startTime + 180,
+      text: `stdout ${spec.sha1}`,
+    },
+    {
+      type: 'stderr',
+      timestamp: spec.startTime + 185,
+      text: `stderr ${spec.sha1}`,
+    },
+    {
+      type: 'error',
+      message: `trace error ${spec.sha1}`,
+      stack: [
+        {
+          file: 'tests/synthetic.spec.ts',
+          line: 99,
+          column: 5,
+        },
+      ],
+    },
+    {
+      type: 'after',
+      callId: rootCallId,
+      endTime: spec.startTime + 240,
     },
   ];
 
@@ -294,13 +393,22 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
       endTime: BASE_TIME + 1800,
     },
     {
+      sha1: 'trace-fail-peer',
+      testId: 'peer-failure-test',
+      fullTitle: 'tests/synthetic.spec.ts:16 › Checkout › exposes repeated failure pattern',
+      rootTitle: 'Peer synthetic failure',
+      outcome: 'unexpected',
+      startTime: BASE_TIME + 1900,
+      endTime: BASE_TIME + 2500,
+    },
+    {
       sha1: 'trace-pass',
       testId: 'passing-test',
       fullTitle: 'tests/synthetic.spec.ts:20 › Checkout › allows successful completion',
       rootTitle: 'Synthetic passing flow',
       outcome: 'expected',
-      startTime: BASE_TIME + 2000,
-      endTime: BASE_TIME + 2600,
+      startTime: BASE_TIME + 2600,
+      endTime: BASE_TIME + 3200,
     },
     {
       sha1: 'trace-skip',
@@ -308,8 +416,8 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
       fullTitle: 'tests/synthetic.spec.ts:30 › Checkout › handles skipped flow',
       rootTitle: 'Synthetic skipped flow',
       outcome: 'skipped',
-      startTime: BASE_TIME + 3000,
-      endTime: BASE_TIME + 3300,
+      startTime: BASE_TIME + 3400,
+      endTime: BASE_TIME + 3700,
       skipped: true,
     },
   ];
@@ -317,14 +425,15 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
   const traceRefs = await Promise.all(specs.map(spec => writeTrace(dataDir, spec)));
   const failedEarlierZip = traceRefs[0]!;
   const failedLatest = traceRefs[1]!;
-  const passed = traceRefs[2]!;
-  const skipped = traceRefs[3]!;
+  const failedPeer = traceRefs[2]!;
+  const passed = traceRefs[3]!;
+  const skipped = traceRefs[4]!;
 
   await fs.promises.writeFile(path.join(dataDir, 'notes.md'), 'ignore me\n');
   await fs.promises.writeFile(path.join(dataDir, 'preview.png'), 'not-a-trace\n');
 
   const reportJson = {
-    stats: { total: 4, expected: 1, unexpected: 2, flaky: 0, skipped: 1, ok: false },
+    stats: { total: 5, expected: 1, unexpected: 3, flaky: 0, skipped: 1, ok: false },
     files: [
       {
         fileId: 'synthetic.spec.ts',
@@ -360,7 +469,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
     ],
     projectNames: ['synthetic'],
     startTime: BASE_TIME,
-    duration: 3300,
+    duration: 3700,
   };
 
   const reportZip = new AdmZip();
@@ -374,6 +483,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
     traces: {
       failedEarlierZip,
       failedLatest,
+      failedPeer,
       passed,
       skipped,
     },

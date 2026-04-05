@@ -41,6 +41,19 @@ Supported local inputs:
 - a single extracted trace directory
 - a single trace zip
 
+Placeholder meanings used in this skill:
+
+- `<sha1>` means one specific trace entry inside `playwright-report/data/`
+- `<tracePath>` means a concrete path to one extracted trace directory or one trace zip
+- `<requestId>` means the numeric `id` returned by `network` for one request inside that trace
+- `<attachmentId>` means the numeric `id` returned by `attachments` for one attachment inside that trace
+- `<callId>` means a Playwright action identifier such as `call@123` used for correlation filters like `--near`
+
+Important scope rule:
+
+- `requestId` and `attachmentId` are local to one trace, not global across the whole report
+- example values like `12` or `1` in this skill are placeholders only, not fixed required values
+
 ## Command Selection
 
 ### Report discovery through playwright-reports
@@ -119,6 +132,8 @@ What it returns:
 - unique failing tests only
 - retries already deduplicated
 - compact triage records with `tracePath` and `traceSha1`
+- per-failure issue counts and primary related browser action when available
+- repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures
 - enough information to follow up with `summary <tracePath>` for one selected failure
 
 ### Single-trace summary
@@ -138,6 +153,7 @@ npx playwright-traces-reader summary /path/to/playwright-report/data/<sha1> --re
 Important behavior:
 
 - `summary` works for both passed and failed traces
+- `summary` includes issues and aggregated related-action diagnostics
 - failed traces may include `failureDomSnapshot`
 - passed traces return `status: "passed"` and `failureDomSnapshot: null`
 
@@ -171,6 +187,50 @@ Source filters:
 - `api`
 - `browser`
 
+Useful filters:
+
+- `--grep <pattern>`
+- `--method <method>`
+- `--status <code>`
+- `--failed`
+- `--near <callId>`
+- `--limit <count>`
+
+Use `request` when one network entry needs full headers, bodies, and correlation details.
+
+How to get `<requestId>`:
+
+- first run `network <tracePath>`
+- read the `id` field from the returned network entries
+- then pass that numeric `id` into `request <tracePath> <requestId>`
+
+Example discovery flow:
+
+```bash
+npx playwright-traces-reader network /path/to/playwright-report/data/<sha1>
+npx playwright-traces-reader request /path/to/playwright-report/data/<sha1> 12
+```
+
+In the second command, `12` means "the request whose `id` was `12` in the `network` output for this same trace".
+
+```bash
+npx playwright-traces-reader request /path/to/playwright-report/data/<sha1> 12
+```
+
+### Console and errors
+
+Use `console` when the user needs browser console output, page errors, or stdio from one trace.
+
+```bash
+npx playwright-traces-reader console /path/to/playwright-report/data/<sha1>
+```
+
+Use `errors` when the user needs failed steps, page errors, and trace-level issues in one place.
+
+```bash
+npx playwright-traces-reader errors /path/to/playwright-report/data/<sha1>
+```
+
 ### DOM snapshots
 
 Use `dom` to inspect UI state before, during, or after actions.
@@ -192,6 +252,30 @@ Use `timeline` to build a merged chronological trace narrative.
 
 ```bash
 npx playwright-traces-reader timeline /path/to/playwright-report/data/<sha1>
+```
+
+### Attachments
+
+Use `attachments` to list captured artifacts for a trace, then `attachment` to extract one by its ID.
+
+How to get `<attachmentId>`:
+
+- first run `attachments <tracePath>`
+- read the `id` field from the returned attachment entries
+- then pass that numeric `id` into `attachment <tracePath> <attachmentId>`
+
+Example discovery flow:
+
+```bash
+npx playwright-traces-reader attachments /path/to/playwright-report/data/<sha1>
+npx playwright-traces-reader attachment /path/to/playwright-report/data/<sha1> 1 --output ./artifact.txt
+```
+
+In the second command, `1` means "the attachment whose `id` was `1` in the `attachments` output for this same trace".
+
+```bash
+npx playwright-traces-reader attachments /path/to/playwright-report/data/<sha1>
+npx playwright-traces-reader attachment /path/to/playwright-report/data/<sha1> 1 --output ./artifact.txt
 ```
 
 ### Screenshots

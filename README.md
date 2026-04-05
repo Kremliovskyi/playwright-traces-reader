@@ -11,9 +11,13 @@ See [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md) for in-process library usag
 
 - Search a local `playwright-reports` hub for reports by metadata, date, and recency before parsing (`search-reports`, `prepare-report`)
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
-- One-call failure summary: title, error, step tree, slowest steps, API calls, and DOM snapshot at failure (`getSummary`)
+- One-call failure summary: title, error, step tree, slowest steps, API calls, issues, related-action diagnostics, and DOM snapshot at failure (`getSummary`)
 - Extract test steps with timings and errors (`getTestSteps`, `getTopLevelFailures`)
 - Extract API and browser network traffic with resolved request/response bodies (`getNetworkTraffic`)
+- Correlate requests and issues to nearby browser actions via related callIds
+- Group repeated failing requests and correlated issues across a report (`getReportFailurePatterns`)
+- Extract browser console, page errors, and stdio output (`getConsoleEntries`, `getTraceIssues`)
+- List and extract trace attachments (`getAttachments`, `extractAttachment`)
 - Save screenshots from screencasts for human visual inspection (`extractScreenshots`)
 - Extract full DOM snapshots (before / during / after each action) with back-reference resolution and filtering options (`getDomSnapshots`)
 - Merged chronological timeline of steps, screenshots, DOM snapshots, and network calls (`getTimeline`)
@@ -49,8 +53,13 @@ Phase 1 commands:
 - `slow-steps <tracePath>` — slowest steps from a single trace
 - `steps <tracePath>` — step tree reconstruction
 - `network <tracePath>` — API and browser network traffic
+- `request <tracePath> <requestId>` — inspect one network request in detail
+- `console <tracePath>` — browser console, page errors, stdout, and stderr
+- `errors <tracePath>` — failed steps, page errors, and trace-level issues
 - `dom <tracePath>` — DOM snapshots before, during, and after actions
 - `timeline <tracePath>` — merged chronological trace timeline
+- `attachments <tracePath>` — attachment manifest for a trace
+- `attachment <tracePath> <attachmentId>` — extract one attachment
 - `screenshots <tracePath> --out-dir <path>` — extract screenshots for human inspection
 
 Default output mode in Phase 1:
@@ -70,7 +79,7 @@ Hub-assisted discovery details:
 - Override with `--base-url <url>` or `PLAYWRIGHT_REPORTS_BASE_URL`
 - If no report is specified by path, `reportRef`, metadata, date, or recency hint, the default local analysis target should be `./playwright-report`
 
-`failures` is a compact triage command. It returns minimal report-level records, including `tracePath` and `traceSha1`, so the next step is to run `summary <tracePath>` for full trace details.
+`failures` is a compact triage command. It returns per-failure trace pointers plus primary related-action context and repeated cross-report request or issue patterns, so the next step is usually to run `summary <tracePath>` for one selected failure.
 
 Typical CLI workflow:
 
@@ -146,7 +155,7 @@ Playwright HTML reports store traces in `playwright-report/data/<sha1>/`:
 <sha1>/
 ├── test.trace          ← step tree (getTestSteps / getTopLevelFailures / getSummary)
 ├── 0-trace.trace       ← browser actions, screenshots, DOM snapshots, context-options
-├── 0-trace.network     ← network HAR entries
+├── 0.network           ← network HAR entries
 └── resources/          ← binary blobs (bodies, images) addressed by SHA1
 ```
 
@@ -270,11 +279,13 @@ Returns the full step tree from `test.trace` as `TestStep[]`. Each step has:
 
 ### `getNetworkTraffic(ctx)`
 
-Returns `NetworkEntry[]` from all `*.network` trace files. Each entry includes:
+Returns `NetworkEntry[]` from all `*.network` trace files. Supports optional filters for `source`, `grep`, `method`, `status`, `failed`, `near`, and `limit`. Each entry includes:
 
 | Field | Type | Description |
 |---|---|---|
+| `id` | `number` | Per-trace request identifier used by `getNetworkRequest()` and the CLI `request` command |
 | `source` | `'api' \| 'browser'` | `'api'` = Playwright `APIRequestContext`; `'browser'` = XHR / navigation |
+| `pageId` | `string \| null` | Page identifier when the request belongs to a browser page |
 | `method` | `string` | HTTP method |
 | `url` | `string` | Request URL |
 | `status` | `number` | HTTP response status |
@@ -286,6 +297,33 @@ Returns `NetworkEntry[]` from all `*.network` trace files. Each entry includes:
 | `mimeType` | `string` | Response content MIME type |
 | `startedDateTime` | `string` | ISO 8601 request start time |
 | `durationMs` | `number` | Total request duration |
+| `relatedAction` | `RelatedActionRef \| null` | Nearest correlated browser action for this request |
+
+### `getNetworkRequest(ctx, requestId)`
+
+Returns one `NetworkEntry` by the per-trace `id` previously returned from `getNetworkTraffic()`.
+
+### `getConsoleEntries(ctx)`
+
+Returns `ConsoleEntry[]` combining browser console output, page errors promoted as console-style error entries, and trace `stdout` / `stderr` streams.
+
+### `getTraceIssues(ctx)`
+
+Returns `TraceIssue[]` combining:
+
+- failed test steps
+- page errors
+- trace-level errors
+
+Each issue may include a correlated `relatedAction` when the failure can be tied to a nearby browser action.
+
+### `getAttachments(ctx)`
+
+Returns `AttachmentEntry[]` for attachments captured in the trace. Each entry includes a per-trace numeric `id` used by `extractAttachment()` and the CLI `attachment` command.
+
+### `extractAttachment(ctx, attachmentId, outputPath?)`
+
+Resolves one attachment by its per-trace numeric `id`, writes it to disk, and returns `SavedAttachment` metadata including the final `savedPath`.
 
 ### `extractScreenshots(ctx, outDir)`
 
@@ -350,7 +388,22 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 | `topLevelSteps` | `TestStep[]` | Non-hook root steps (the visible `test.step()` blocks), each with `.children` |
 | `slowestSteps` | `TestStep[]` | Top 5 slowest steps across the full step tree |
 | `networkCalls` | `NetworkEntry[]` | All HTTP calls (`source: 'api'` = Node.js `APIRequestContext`; `source: 'browser'` = XHR / fetch / navigation) |
+| `issues` | `TraceIssue[]` | Step failures, page errors, and trace-level issues for the trace |
+| `actionDiagnostics` | `ActionDiagnosticSummary[]` | Aggregated request and issue counts grouped by related browser action |
 | `failureDomSnapshot` | `ActionDomSnapshots \| null` | DOM snapshot closest in time to the failure, or `null` |
+
+### `getReportFailurePatterns(reportDataDir, options?)`
+
+Returns `ReportFailurePatterns` for unique report-level failures, grouping:
+
+- repeated failing requests across traces
+- repeated correlated issues across traces
+
+This uses the same retry-deduplication and optional skip-filtering rules as `getFailedTestSummaries()`.
+
+### `summarizeReportFailurePatterns(selections)`
+
+Returns the same `ReportFailurePatterns` shape, but starts from already prepared `FailedTraceSelection[]` values instead of rescanning a report directory. Use this when you have already called the internal selection flow and want to avoid repeating the trace scan.
 
 ### `getResourceBuffer(ctx, sha1)`
 

@@ -69,15 +69,41 @@ Notes:
       "errorMessage": "Synthetic failure for trace-fail-latest",
       "networkCallCount": 2,
       "networkErrorCount": 2,
+      "issueCount": 3,
+      "correlatedActionCount": 1,
+      "primaryRelatedAction": {
+        "action": {
+          "callId": "call@trace-fail-latest",
+          "title": "Click failing submit button"
+        },
+        "networkCallCount": 2,
+        "failingNetworkCallCount": 2,
+        "issueCount": 2
+      },
       "hasFailureDomSnapshot": true
     }
-  ]
+  ],
+  "patterns": {
+    "repeatedFailingRequests": [
+      {
+        "signature": "POST /:id/api-call",
+        "count": 2
+      }
+    ],
+    "repeatedIssues": [
+      {
+        "signature": "page | PageError | page error :trace",
+        "count": 2
+      }
+    ]
+  }
 }
 ```
 
 Payload field:
 
 - `failures` — array of compact failure records for report-level triage
+- `patterns` — repeated failing-request and repeated correlated-issue groups across unique non-skipped failures
 
 Each failure item includes:
 
@@ -91,6 +117,9 @@ Each failure item includes:
 - `traceSha1` — trace directory identifier
 - `networkCallCount` — number of network entries in the trace summary
 - `networkErrorCount` — number of network entries with status >= 400
+- `issueCount` — number of issues in the trace summary
+- `correlatedActionCount` — number of related browser actions with aggregated diagnostics
+- `primaryRelatedAction` — top action diagnostic for the failure when available
 - `hasFailureDomSnapshot` — whether summary identified a nearest failure DOM snapshot
 
 ### `summary`
@@ -121,6 +150,8 @@ Important `summary` fields:
 - `topLevelSteps`
 - `slowestSteps`
 - `networkCalls`
+- `issues`
+- `actionDiagnostics`
 - `failureDomSnapshot`
 
 `summary` is the deep-inspection payload. Unlike `failures`, it intentionally keeps the full trace analysis shape.
@@ -206,7 +237,9 @@ Payload field:
 
 Important network fields:
 
+- `id`
 - `source`
+- `pageId`
 - `method`
 - `url`
 - `status`
@@ -218,6 +251,86 @@ Important network fields:
 - `mimeType`
 - `startedDateTime`
 - `durationMs`
+- `relatedAction`
+
+### `request`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "request",
+  "request": {
+    "id": 12,
+    "method": "POST",
+    "url": "https://example.test/api"
+  }
+}
+```
+
+Payload field:
+
+- `request` — one `NetworkEntry` object
+
+### `console`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "console",
+  "count": 3,
+  "entries": [
+    {
+      "source": "browser",
+      "level": "error",
+      "text": "Something failed"
+    }
+  ]
+}
+```
+
+Payload field:
+
+- `entries` — array of `ConsoleEntry` objects
+
+Important console fields:
+
+- `source`
+- `level`
+- `text`
+- `timestamp`
+- `pageId`
+- `location`
+
+### `errors`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "errors",
+  "count": 2,
+  "errors": [
+    {
+      "source": "step",
+      "message": "Synthetic failure"
+    }
+  ]
+}
+```
+
+Payload field:
+
+- `errors` — array of `TraceIssue` objects
+
+Important error fields:
+
+- `source`
+- `message`
+- `name`
+- `stack`
+- `timestamp`
+- `callId`
+- `title`
+- `location`
 
 ### `dom`
 
@@ -288,6 +401,53 @@ Each timeline entry includes:
 - `screenshot`
 - `dom`
 - `network`
+
+### `attachments`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "attachments",
+  "count": 1,
+  "attachments": [
+    {
+      "id": 1,
+      "name": "artifact.txt"
+    }
+  ]
+}
+```
+
+Payload field:
+
+- `attachments` — array of `AttachmentEntry` objects
+
+Important attachment fields:
+
+- `id`
+- `callId`
+- `actionTitle`
+- `name`
+- `contentType`
+- `sha1`
+- `size`
+
+### `attachment`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "attachment",
+  "attachment": {
+    "id": 1,
+    "savedPath": "/tmp/artifact.txt"
+  }
+}
+```
+
+Payload field:
+
+- `attachment` — one `SavedAttachment` object
 
 ### `screenshots`
 

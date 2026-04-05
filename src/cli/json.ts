@@ -1,8 +1,14 @@
 import type {
   ActionDomSnapshots,
+  ActionDiagnosticSummary,
+  AttachmentEntry,
+  ConsoleEntry,
   NetworkEntry,
+  ReportFailurePatterns,
+  SavedAttachment,
   Screenshot,
   TestStep,
+  TraceIssue,
   TimelineEntry,
   TraceSummary,
 } from '../index';
@@ -21,6 +27,9 @@ export interface FailureListItem {
   traceSha1: string;
   networkCallCount: number;
   networkErrorCount: number;
+  issueCount: number;
+  correlatedActionCount: number;
+  primaryRelatedAction: ActionDiagnosticSummary | null;
   hasFailureDomSnapshot: boolean;
 }
 
@@ -51,6 +60,7 @@ export interface FailuresCommandJson {
   command: 'failures';
   count: number;
   failures: FailureListItem[];
+  patterns: ReportFailurePatterns;
 }
 
 export interface SummaryCommandJson {
@@ -78,6 +88,39 @@ export interface NetworkCommandJson {
   command: 'network';
   count: number;
   entries: NetworkEntry[];
+}
+
+export interface RequestCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'request';
+  request: NetworkEntry;
+}
+
+export interface ConsoleCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'console';
+  count: number;
+  entries: ConsoleEntry[];
+}
+
+export interface ErrorsCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'errors';
+  count: number;
+  errors: TraceIssue[];
+}
+
+export interface AttachmentsCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'attachments';
+  count: number;
+  attachments: AttachmentEntry[];
+}
+
+export interface AttachmentCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'attachment';
+  attachment: SavedAttachment;
 }
 
 export interface DomCommandJson {
@@ -110,6 +153,11 @@ export type CliCommandJson =
   | SlowStepsCommandJson
   | StepsCommandJson
   | NetworkCommandJson
+  | RequestCommandJson
+  | ConsoleCommandJson
+  | ErrorsCommandJson
+  | AttachmentsCommandJson
+  | AttachmentCommandJson
   | DomCommandJson
   | TimelineCommandJson
   | ScreenshotsCommandJson;
@@ -142,12 +190,13 @@ export function createPrepareReportCommandJson(report: HubReportDescriptor, mode
   };
 }
 
-export function createFailuresCommandJson(failures: FailureListItem[]): FailuresCommandJson {
+export function createFailuresCommandJson(failures: FailureListItem[], patterns: ReportFailurePatterns): FailuresCommandJson {
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'failures',
     count: failures.length,
     failures,
+    patterns,
   };
 }
 
@@ -183,6 +232,49 @@ export function createNetworkCommandJson(entries: NetworkEntry[]): NetworkComman
     command: 'network',
     count: entries.length,
     entries,
+  };
+}
+
+export function createRequestCommandJson(request: NetworkEntry): RequestCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'request',
+    request,
+  };
+}
+
+export function createConsoleCommandJson(entries: ConsoleEntry[]): ConsoleCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'console',
+    count: entries.length,
+    entries,
+  };
+}
+
+export function createErrorsCommandJson(errors: TraceIssue[]): ErrorsCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'errors',
+    count: errors.length,
+    errors,
+  };
+}
+
+export function createAttachmentsCommandJson(attachments: AttachmentEntry[]): AttachmentsCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'attachments',
+    count: attachments.length,
+    attachments,
+  };
+}
+
+export function createAttachmentCommandJson(attachment: SavedAttachment): AttachmentCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'attachment',
+    attachment,
   };
 }
 
