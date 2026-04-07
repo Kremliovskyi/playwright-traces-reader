@@ -56,8 +56,8 @@
         "ts-jest",
         {
           "tsconfig": {
-            "module": "commonjs",
-            "moduleResolution": "node",
+            "module": "Node16",
+            "moduleResolution": "Node16",
             "esModuleInterop": true,
             "types": [
               "node",
