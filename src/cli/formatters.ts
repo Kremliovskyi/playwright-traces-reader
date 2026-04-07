@@ -3,6 +3,7 @@ import type {
   ActionDiagnosticSummary,
   AttachmentEntry,
   ConsoleEntry,
+  FoundTrace,
   NetworkEntry,
   ReportFailurePatterns,
   SavedAttachment,
@@ -414,4 +415,19 @@ function truncate(value: string | null | undefined, maxLength: number): string |
 function indentBlock(value: string, spaces: number): string {
   const indent = ' '.repeat(spaces);
   return value.split('\n').map(line => `${indent}${line}`).join('\n');
+}
+
+export function formatFindTracesText(traces: FoundTrace[]): string {
+  if (traces.length === 0) return 'No matching traces found.';
+
+  return traces.map((t, index) => {
+    return [
+      `${index + 1}. [${t.outcome}] ${t.testTitle}`,
+      `   Project: ${t.projectName}`,
+      `   File: ${t.file}`,
+      `   Retry: ${t.resultIndex + 1}`,
+      `   Trace SHA1: ${t.traceSha1}`,
+      `   Trace path: ${t.tracePath}`,
+    ].join('\n');
+  }).join('\n\n');
 }

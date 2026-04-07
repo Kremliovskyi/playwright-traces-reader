@@ -136,6 +136,38 @@ What it returns:
 - repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures
 - enough information to follow up with `summary <tracePath>` for one selected failure
 
+### Finding traces for any test
+
+Use `find-traces` when the user wants to locate trace paths for a specific test — including passed tests — by name.
+
+```bash
+npx playwright-traces-reader find-traces /path/to/playwright-report "test name pattern"
+```
+
+The `<grep>` argument is a case-insensitive substring matched against the full test title (file path + describe blocks + test name). Special characters in test names (brackets, quotes, parentheses, non-Latin scripts) are handled safely — paste any fragment directly.
+
+Use `--outcome` to filter by test outcome:
+
+```bash
+npx playwright-traces-reader find-traces /path/to/playwright-report "checkout" --outcome expected
+npx playwright-traces-reader find-traces /path/to/playwright-report "checkout" --outcome flaky
+```
+
+Outcome values: `expected` (passed), `unexpected` (failed), `flaky`, `skipped`.
+
+What it returns:
+
+- all matching tests with their trace paths, including all retries
+- test-level outcome from `report.json`
+- trace SHA1 and absolute trace path for direct use with `summary <tracePath>`
+
+Typical follow-up:
+
+```bash
+npx playwright-traces-reader find-traces /path/to/playwright-report "login" --outcome expected
+npx playwright-traces-reader summary <tracePath> --report /path/to/playwright-report
+```
+
 ### Single-trace summary
 
 Use `summary` when the user wants one complete summary for a specific trace.
@@ -299,10 +331,11 @@ npx playwright-traces-reader init-skills
 1. If the user gave no report identifier at all, start with the local `playwright-report/` directory.
 2. If the report path is unknown but the user did provide metadata, date, or recency hints, use `search-reports` and then `prepare-report` first.
 3. Identify whether the task is report-level or single-trace.
-4. Choose the narrowest parser command that answers the question.
-5. Use the default JSON output for agent reasoning or follow-up processing.
-6. Use `--format text` when the user wants a direct terminal-style summary.
-7. Do not fall back to library APIs unless the requested workflow is not covered by a supported command.
+4. If the user wants to analyze a specific test by name (including passed tests), use `find-traces` to locate its trace path first.
+5. Choose the narrowest parser command that answers the question.
+6. Use the default JSON output for agent reasoning or follow-up processing.
+7. Use `--format text` when the user wants a direct terminal-style summary.
+8. Do not fall back to library APIs unless the requested workflow is not covered by a supported command.
 
 ## Output Guidance
 
@@ -317,6 +350,8 @@ npx playwright-traces-reader init-skills
 - Find checkout reports from `2026-04-01` through `2026-04-03` and prepare the newest one.
 - Resolve this `reportRef` and summarize the failing trace.
 - Use the reports hub at `http://127.0.0.1:9333` to find the most recent smoke run.
+- Find the trace for my passed "login" test and show me its summary.
+- Show me traces for all flaky tests matching "checkout".
 
 ## More Documentation
 

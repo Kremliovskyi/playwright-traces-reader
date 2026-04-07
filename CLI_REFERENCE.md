@@ -25,6 +25,7 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | `search-reports` | hub | Search reports through a local playwright-reports hub |
 | `prepare-report` | hub | Resolve one hub report reference into a local path |
 | `failures` | report | Return unique failing tests across a report |
+| `find-traces` | report | Find trace paths for tests matching a name pattern |
 | `summary` | trace | Return one complete summary for a single trace |
 | `slow-steps` | trace | Return the slowest steps for a single trace |
 | `steps` | trace | Reconstruct and print the step tree |
@@ -166,6 +167,50 @@ Examples:
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader summary /absolute/path/to/trace-dir
 npx playwright-traces-reader failures ./playwright-report --format text
+```
+
+## `find-traces`
+
+Finds trace paths for tests matching a name pattern in a report. Works for any test outcome — including passed tests.
+
+Usage:
+
+```bash
+npx playwright-traces-reader find-traces <reportPath> <grep> [--outcome <outcome>] [--format json|text]
+```
+
+Accepted inputs:
+
+- report root (directory containing `index.html` and `data/`)
+
+Arguments:
+
+- `<grep>` is a case-insensitive substring matched against the full test title (file path + describe blocks + test name). Special characters in test names are handled safely — you can paste any fragment directly.
+
+Options:
+
+- `--outcome` filters by test-level outcome: `expected`, `unexpected`, `flaky`, or `skipped`
+
+Behavior:
+
+- reads report metadata from `index.html` without loading trace contents
+- returns all matching tests with trace paths for every retry
+- each item includes `tracePath`, `traceSha1`, `testTitle`, `outcome`, `resultIndex`, `projectName`, and `file`
+- use `summary <tracePath>` to inspect one found trace in full
+
+Examples:
+
+```bash
+npx playwright-traces-reader find-traces ./playwright-report "login"
+npx playwright-traces-reader find-traces ./playwright-report "checkout" --outcome expected
+npx playwright-traces-reader find-traces ./playwright-report "order" --outcome flaky --format text
+```
+
+Typical follow-up:
+
+```bash
+npx playwright-traces-reader find-traces ./playwright-report "login" --outcome expected
+npx playwright-traces-reader summary <tracePath> --report ./playwright-report
 ```
 
 ## `summary`

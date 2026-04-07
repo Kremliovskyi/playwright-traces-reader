@@ -22,6 +22,7 @@ See [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md) for in-process library usag
 - Extract full DOM snapshots (before / during / after each action) with back-reference resolution and filtering options (`getDomSnapshots`)
 - Merged chronological timeline of steps, screenshots, DOM snapshots, and network calls (`getTimeline`)
 - Reliable unique test title for deduplication across retries (`getTestTitle`)
+- Find traces for any test by name pattern, including passed tests, with outcome filtering (`findTraces`)
 - Support for multi-test reports (many SHA1 trace entries in one `data/` directory)
 - GitHub Copilot skill scaffold via `init-skills` CLI command
 
@@ -39,6 +40,7 @@ The package exposes a local CLI. In a repository that has the package installed,
 npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader find-traces ./playwright-report "test name"
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
 ```
@@ -49,6 +51,7 @@ Phase 1 commands:
 - `prepare-report <reportRef>` — resolve a searched report into local analysis-ready paths
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
 - `failures <reportPath>` — report-level unique failing test analysis
+- `find-traces <reportPath> <grep>` — find trace paths for tests matching a name pattern
 - `summary <tracePath>` — one-call trace summary
 - `slow-steps <tracePath>` — slowest steps from a single trace
 - `steps <tracePath>` — step tree reconstruction
@@ -81,11 +84,20 @@ Hub-assisted discovery details:
 
 `failures` is a compact triage command. It returns per-failure trace pointers plus primary related-action context and repeated cross-report request or issue patterns, so the next step is usually to run `summary <tracePath>` for one selected failure.
 
+`find-traces` is a discovery command for locating any test's trace — including passed tests. It matches a regex against full test titles and returns trace paths for all retries, with optional `--outcome` filtering.
+
 Typical CLI workflow:
 
 ```bash
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader summary /absolute/path/to/playwright-report/data/<sha1>
+```
+
+Trace discovery workflow:
+
+```bash
+npx playwright-traces-reader find-traces ./playwright-report "login" --outcome expected
+npx playwright-traces-reader summary <tracePath> --report ./playwright-report
 ```
 
 Hub-assisted workflow:
@@ -420,6 +432,26 @@ Pre-build the maps and pass them to `getSummary()` via `reportTraceMaps` when ca
 ### `getReportMetadata(reportDir)`
 
 Parses the `report.json` embedded inside a Playwright HTML report's `index.html`. Returns `ReportMetadata` with test outcomes, stats, and file summaries — or `null` if `index.html` is not found. Accepts either the report root directory or the `data/` subdirectory.
+
+### `findTraces(reportDir, grep, options?)`
+
+Searches a Playwright HTML report for tests matching a name pattern and returns trace paths for every matching result, including all retries.
+
+- `grep` is a case-insensitive substring matched against the full test title (file path + describe blocks + test name). Special characters in test names (brackets, quotes, parentheses, non-Latin scripts) are handled safely.
+- `options.outcome` optionally filters by test outcome: `'expected'`, `'unexpected'`, `'flaky'`, or `'skipped'`.
+
+Returns `FoundTrace[]` where each entry includes:
+
+| Field | Type | Description |
+|---|---|---|
+| `testTitle` | `string` | Full test title (path + describe + name) |
+| `testId` | `string` | Unique test identifier |
+| `projectName` | `string` | Playwright project name |
+| `file` | `string` | Test file path |
+| `outcome` | `string` | Test-level outcome from `report.json` |
+| `resultIndex` | `number` | Zero-based retry index |
+| `traceSha1` | `string` | Trace directory name |
+| `tracePath` | `string` | Absolute path to the trace in `data/` |
 
 ### `readNdjson<T>(filePath)`
 

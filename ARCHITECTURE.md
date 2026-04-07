@@ -96,6 +96,7 @@ This layer is responsible for:
 - loading raw resource blobs by SHA1
 - loading report metadata from `index.html`
 - building lookup maps from report metadata
+- discovering trace paths for tests matching a name pattern from report metadata
 
 Primary APIs:
 
@@ -105,6 +106,9 @@ Primary APIs:
 - `getResourceBuffer(traceContext, sha1)`
 - `getReportMetadata(reportDir)`
 - `buildReportTraceMaps(meta)`
+- `findTraces(reportDir, grep, options?)` — searches report metadata for tests matching a name pattern and returns trace paths for all matching results including retries
+
+`findTraces()` works entirely from report metadata embedded in `index.html`. It does not open or scan trace directories. The `grep` argument is always treated as a literal case-insensitive substring (not a regex) so that arbitrary test names — including brackets, parentheses, quotes, and non-Latin scripts — can be pasted directly without escaping. Unicode case folding is enabled via the `u` flag.
 
 This layer has no formatting logic and no agent-specific behavior.
 
@@ -172,6 +176,7 @@ Command surface:
 - `prepare-report <reportRef>`
 - `init-skills [targetDir]`
 - `failures <reportPath>`
+- `find-traces <reportPath> <grep>`
 - `summary <tracePath>`
 - `slow-steps <tracePath>`
 - `steps <tracePath>`
@@ -204,6 +209,7 @@ Current CLI contract choices:
 - `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics.
 - `network` is the listing surface for discovering per-trace `requestId` values later consumed by `request`.
 - `attachments` is the listing surface for discovering per-trace `attachmentId` values later consumed by `attachment`.
+- `find-traces` is a lightweight metadata-only discovery command. It reads report metadata from `index.html`, matches tests by literal case-insensitive substring, and returns trace paths without opening any trace files. It supports `--outcome` filtering and returns all retries for matched tests.
 
 ### Report-hub discovery flow
 
@@ -257,6 +263,8 @@ The `summary` payload is richer than the initial implementation and now includes
 - `actionDiagnostics`
 
 The `network` and `attachments` payloads expose per-trace numeric IDs that drive the `request` and `attachment` drilldown commands.
+
+The `find-traces` payload is a lightweight discovery contract. It returns trace identity and path data extracted from report metadata without loading any trace contents. Each entry includes the full test title, test ID, project name, file, outcome, retry index, trace SHA1, and absolute trace path. The grep input is escaped as a literal substring to safely handle arbitrary test names with special characters and non-Latin scripts.
 
 This contract is documented separately in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md), but architecturally it matters because it creates a stable boundary for:
 
@@ -332,6 +340,27 @@ report root or report data dir
   -> repeated request and issue pattern groups
   -> optional CLI formatter or JSON envelope
 ```
+
+### Trace discovery by test name
+
+```text
+report root
+  -> getReportMetadata (report.json from index.html)
+  -> literal case-insensitive substring match against full test titles
+  -> optional outcome filter (expected / unexpected / flaky / skipped)
+  -> map matching results to trace SHA1 paths in data/
+  -> all retries included (one entry per result with a trace attachment)
+  -> FoundTrace[] with testTitle, testId, projectName, file, outcome, resultIndex, tracePath, traceSha1
+  -> optional CLI formatter or JSON envelope
+```
+
+Important behavior:
+
+- The grep input is always escaped as a literal substring. Users can paste any fragment from a test name — brackets (`[UAT EU - 3/30]`), parentheses (`(mocked vendor)`), quotes (`"none of the above"`), dots, pipes, and non-Latin scripts (Cyrillic, CJK, Arabic, Korean, emoji) all match correctly without manual escaping.
+- Unicode case folding is enabled so `Straße` matches `straße` and vice versa.
+- Per-result pass/fail status is not available from the HTML report metadata. The test-level `outcome` field is provided instead (`expected` = all retries passed, `unexpected` = all failed, `flaky` = mixed).
+- Results without a trace attachment (e.g. skipped tests with no execution) are excluded.
+- `findTraces()` does not open or extract any trace directories — it operates purely on report metadata, making it lightweight even for large reports.
 
 ### Request and attachment drilldown
 

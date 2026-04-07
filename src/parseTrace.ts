@@ -210,3 +210,91 @@ export function buildReportTraceMaps(meta: ReportMetadata): ReportTraceMaps {
   return { outcomeByTraceSha1, testIdByTraceSha1 };
 }
 
+// ---------- find-traces ----------
+
+/** A single trace entry returned by `findTraces`. */
+export interface FoundTrace {
+  testTitle: string;
+  testId: string;
+  projectName: string;
+  file: string;
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped';
+  resultIndex: number;
+  traceSha1: string;
+  tracePath: string;
+}
+
+/**
+ * Searches a Playwright HTML report for tests matching a name pattern and
+ * returns trace paths for every matching result (including retries).
+ *
+ * @param reportDir   Path to the report root directory (containing `index.html` and `data/`).
+ * @param grep        Case-insensitive substring to match against the full test title (path + title).
+ * @param options     Optional filters for outcome.
+ */
+export async function findTraces(
+  reportDir: string,
+  grep: string,
+  options?: { outcome?: string },
+): Promise<FoundTrace[]> {
+  const meta = await getReportMetadata(reportDir);
+  if (!meta) throw new Error(`Could not read report metadata from ${reportDir}. Is index.html present?`);
+
+  const dataDir = await resolveDataDir(reportDir);
+  const pattern = literalPattern(grep);
+  const results: FoundTrace[] = [];
+
+  for (const file of meta.files) {
+    for (const t of file.tests) {
+      const fullTitle = [...t.path, t.title].join(' > ');
+      if (!pattern.test(fullTitle)) continue;
+
+      if (options?.outcome && t.outcome !== options.outcome) continue;
+
+      for (let i = 0; i < t.results.length; i++) {
+        const result = t.results[i]!;
+
+        for (const att of result.attachments) {
+          if (att.name === 'trace' && att.path) {
+            const sha1 = path.basename(att.path, '.zip');
+            const tracePath = path.join(dataDir, sha1);
+
+            results.push({
+              testTitle: fullTitle,
+              testId: t.testId,
+              projectName: t.projectName,
+              file: file.fileName,
+              outcome: t.outcome,
+              resultIndex: i,
+              traceSha1: sha1,
+              tracePath,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+async function resolveDataDir(reportDir: string): Promise<string> {
+  const resolved = path.resolve(reportDir);
+  const dataDir = path.join(resolved, 'data');
+  if (fs.existsSync(dataDir)) return dataDir;
+  // Caller may have passed the data dir itself
+  if (path.basename(resolved) === 'data') return resolved;
+  return path.join(path.dirname(resolved), 'data');
+}
+
+/**
+ * Builds a case-insensitive literal substring pattern from user input.
+ * All regex special characters are escaped so arbitrary test names —
+ * including brackets, parentheses, quotes, and non-Latin scripts — match
+ * as-is. The `u` flag enables proper Unicode case folding.
+ */
+function literalPattern(input: string): RegExp {
+  const escaped = input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped, 'iu');
+}
+

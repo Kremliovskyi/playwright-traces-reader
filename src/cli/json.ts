@@ -3,6 +3,7 @@ import type {
   ActionDiagnosticSummary,
   AttachmentEntry,
   ConsoleEntry,
+  FoundTrace,
   NetworkEntry,
   ReportFailurePatterns,
   SavedAttachment,
@@ -144,6 +145,13 @@ export interface ScreenshotsCommandJson {
   screenshots: Screenshot[];
 }
 
+export interface FindTracesCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'find-traces';
+  count: number;
+  traces: FoundTrace[];
+}
+
 export type CliCommandJson =
   | InitSkillsCommandJson
   | SearchReportsCommandJson
@@ -160,7 +168,8 @@ export type CliCommandJson =
   | AttachmentCommandJson
   | DomCommandJson
   | TimelineCommandJson
-  | ScreenshotsCommandJson;
+  | ScreenshotsCommandJson
+  | FindTracesCommandJson;
 
 export function createInitSkillsCommandJson(skillPath: string): InitSkillsCommandJson {
   return {
@@ -302,5 +311,14 @@ export function createScreenshotsCommandJson(screenshots: Screenshot[]): Screens
     command: 'screenshots',
     count: screenshots.length,
     screenshots,
+  };
+}
+
+export function createFindTracesCommandJson(traces: FoundTrace[]): FindTracesCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'find-traces',
+    count: traces.length,
+    traces,
   };
 }

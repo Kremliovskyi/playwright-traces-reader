@@ -1,5 +1,5 @@
-export { prepareTraceDir, readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps } from './parseTrace';
-export type { TraceContext, ReportTestSummary, ReportMetadata, ReportTraceMaps } from './parseTrace';
+export { prepareTraceDir, readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps, findTraces } from './parseTrace';
+export type { TraceContext, ReportTestSummary, ReportMetadata, ReportTraceMaps, FoundTrace } from './parseTrace';
 
 export {
   getTestSteps,

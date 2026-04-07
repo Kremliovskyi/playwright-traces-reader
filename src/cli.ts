@@ -14,6 +14,7 @@ import {
   summarizeReportFailurePatterns,
   getTimeline,
   prepareTraceDir,
+  findTraces,
 } from './index';
 import { getFailedTraceSelections } from './extractors';
 import {
@@ -36,6 +37,7 @@ import {
   formatDomSnapshotsText,
   formatErrorsText,
   formatFailuresText,
+  formatFindTracesText,
   formatInitSkillsText,
   formatNetworkText,
   formatScreenshotsText,
@@ -56,6 +58,7 @@ import {
   createDomCommandJson,
   createErrorsCommandJson,
   createFailuresCommandJson,
+  createFindTracesCommandJson,
   createNetworkCommandJson,
   createScreenshotsCommandJson,
   createSlowStepsCommandJson,
@@ -200,6 +203,27 @@ function buildProgram(io: CliIo): Command {
       });
 
       emitOutput(io, options.format, createFailuresCommandJson(failures, patterns), formatFailuresText(failures, patterns));
+    });
+
+  program
+    .command('find-traces <reportPath> <grep>')
+    .description('Find trace paths for tests matching a name pattern in a Playwright report')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('--outcome <outcome>', 'Filter by test outcome: expected, unexpected, flaky, or skipped')
+    .action(async (
+      reportPath: string,
+      grep: string,
+      options: { format: OutputFormat; outcome?: string },
+    ) => {
+      if (options.outcome && !['expected', 'unexpected', 'flaky', 'skipped'].includes(options.outcome)) {
+        throw new Error(`Invalid outcome: ${options.outcome}. Expected expected, unexpected, flaky, or skipped.`);
+      }
+
+      const traces = await findTraces(reportPath, grep, {
+        ...(options.outcome ? { outcome: options.outcome } : {}),
+      });
+
+      emitOutput(io, options.format, createFindTracesCommandJson(traces), formatFindTracesText(traces));
     });
 
   program

@@ -122,6 +122,50 @@ Each failure item includes:
 - `primaryRelatedAction` — top action diagnostic for the failure when available
 - `hasFailureDomSnapshot` — whether summary identified a nearest failure DOM snapshot
 
+### `find-traces`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "find-traces",
+  "count": 2,
+  "traces": [
+    {
+      "testTitle": "Order flow [DEV NA] > e2eOrderTC01 - should process order",
+      "testId": "abc123-def456",
+      "projectName": "e2e-falcons",
+      "file": "e2e/order-processing.spec.ts",
+      "outcome": "expected",
+      "resultIndex": 0,
+      "traceSha1": "7ef1d1fa1b378d78fb3d442492aa3a2b54de124f",
+      "tracePath": "/absolute/path/to/report/data/7ef1d1fa1b378d78fb3d442492aa3a2b54de124f"
+    }
+  ]
+}
+```
+
+Payload field:
+
+- `traces` — array of `FoundTrace` objects matching the search pattern
+
+Each trace item includes:
+
+- `testTitle` — full test title (file path + describe blocks + test name)
+- `testId` — unique Playwright test identifier
+- `projectName` — Playwright project name
+- `file` — test file path
+- `outcome` — test-level outcome from `report.json` (`expected`, `unexpected`, `flaky`, `skipped`)
+- `resultIndex` — zero-based retry index (0 = first attempt, 1 = first retry, etc.)
+- `traceSha1` — trace directory identifier in `data/`
+- `tracePath` — absolute path to the trace directory, usable as input for `summary <tracePath>`
+
+Notes:
+
+- a test with retries produces multiple entries with different `resultIndex` values
+- `outcome` is the test-level aggregate (e.g. `flaky` means some retries passed and some failed)
+- per-result pass/fail status is not available from the HTML report metadata
+- the `tracePath` can be passed directly to `summary`, `steps`, `network`, etc.
+
 ### `summary`
 
 ```json
@@ -482,4 +526,5 @@ Each screenshot item includes:
 - Phase 1 locks the command envelope shape and payload field names.
 - `summary`, `slow-steps`, `steps`, `network`, `dom`, `timeline`, and `screenshots` currently mirror the exported parser data structures used by the CLI.
 - `failures` is intentionally different: it is a compact CLI-specific triage contract, not a direct `TraceSummary[]` mirror.
+- `find-traces` is a lightweight discovery contract returning trace identity and path data from report metadata, without loading trace contents.
 - If a future change needs to break one of these contracts, bump `schemaVersion` and document the migration.
