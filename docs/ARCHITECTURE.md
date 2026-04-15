@@ -6,8 +6,6 @@ For command-by-command CLI usage, see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
 For versioned JSON outputs, see [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
 
-For in-process consumption guidance, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
-
 This document describes the current architecture of `playwright-traces-reader` as it exists today: a parser and extractor library with a real local CLI, stable JSON output envelopes, and a CLI-first GitHub Copilot skill scaffold.
 
 ## Current Role
@@ -70,6 +68,11 @@ src/
     helpers.ts          CLI path resolution, report-hub helpers, and shared utilities
     formatters.ts       human-readable text output formatters
     json.ts             versioned JSON command envelopes
+docs/
+  ARCHITECTURE.md       this document
+  CLI_ARCHITECTURE.md   future hub boundary and long-term positioning
+  CLI_JSON_CONTRACTS.md versioned JSON output contracts
+  CLI_REFERENCE.md      command-by-command CLI usage
 templates/
   skills/
     analyze-playwright-traces/
@@ -282,9 +285,8 @@ The bundled GitHub Copilot skill scaffold is now CLI-first.
 - it tells agents to use supported CLI commands
 - it avoids temporary script generation
 - it points users to `CLI_REFERENCE.md` and `CLI_JSON_CONTRACTS.md`
-- it leaves direct library integration guidance to `LIBRARY_INTEGRATION.md`
 
-That split is deliberate. The skill is the agent-facing command surface; the library docs are for in-process consumers.
+The skill is the agent-facing command surface.
 
 ## Testing Architecture
 

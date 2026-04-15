@@ -340,7 +340,6 @@ npx playwright-traces-reader init-skills
 ## Output Guidance
 
 - All CLI JSON outputs use versioned envelopes.
-- See `CLI_JSON_CONTRACTS.md` in the package for payload structure.
 - For screenshots, the JSON output contains file metadata, not image understanding.
 
 ## Example Prompts This Skill Covers
@@ -352,8 +351,3 @@ npx playwright-traces-reader init-skills
 - Use the reports hub at `http://127.0.0.1:9333` to find the most recent smoke run.
 - Find the trace for my passed "login" test and show me its summary.
 - Show me traces for all flaky tests matching "checkout".
-
-## More Documentation
-
-- Use the CLI reference for detailed command docs: `CLI_REFERENCE.md`
-- Use the library integration guide only for in-process integrations such as `playwright-reports`: `LIBRARY_INTEGRATION.md`

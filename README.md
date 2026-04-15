@@ -2,10 +2,9 @@
 
 Parse [Playwright](https://playwright.dev) trace files into structured data — useful for AI agents, custom reporters, and post-run analysis tooling.
 
-See [CLI_ARCHITECTURE.md](CLI_ARCHITECTURE.md) for the future CLI and report-hub architecture overview.
-See [CLI_REFERENCE.md](CLI_REFERENCE.md) for the detailed CLI command reference.
-See [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md) for the versioned JSON output contracts used by the CLI.
-See [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md) for in-process library usage guidance.
+See [CLI_ARCHITECTURE.md](docs/CLI_ARCHITECTURE.md) for the future CLI and report-hub architecture overview.
+See [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the detailed CLI command reference.
+See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON output contracts used by the CLI.
 
 ## Features
 
@@ -73,7 +72,7 @@ Optional output mode:
 
 - `--format text` — human-readable terminal output when explicitly requested
 
-JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](CLI_JSON_CONTRACTS.md).
+JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md).
 
 Hub-assisted discovery details:
 
@@ -128,8 +127,6 @@ Like the other CLI commands, `init-skills` now returns JSON by default and suppo
 ## Library Integration
 
 The preferred interface for agents and test repositories is the CLI.
-
-For in-process integrations such as future `playwright-reports` usage, see [LIBRARY_INTEGRATION.md](LIBRARY_INTEGRATION.md).
 
 Important boundary:
 
