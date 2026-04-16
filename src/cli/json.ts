@@ -152,6 +152,13 @@ export interface FindTracesCommandJson {
   traces: FoundTrace[];
 }
 
+export interface VaultReadCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'vault-read';
+  filename: string;
+  content: string;
+}
+
 export type CliCommandJson =
   | InitSkillsCommandJson
   | SearchReportsCommandJson
@@ -169,7 +176,8 @@ export type CliCommandJson =
   | DomCommandJson
   | TimelineCommandJson
   | ScreenshotsCommandJson
-  | FindTracesCommandJson;
+  | FindTracesCommandJson
+  | VaultReadCommandJson;
 
 export function createInitSkillsCommandJson(skillPath: string): InitSkillsCommandJson {
   return {
@@ -320,5 +328,14 @@ export function createFindTracesCommandJson(traces: FoundTrace[]): FindTracesCom
     command: 'find-traces',
     count: traces.length,
     traces,
+  };
+}
+
+export function createVaultReadCommandJson(filename: string, content: string): VaultReadCommandJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'vault-read',
+    filename,
+    content,
   };
 }

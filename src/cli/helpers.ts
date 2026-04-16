@@ -14,6 +14,7 @@ export interface HubReportDescriptor {
   reportRootPath: string | null;
   reportDataPath: string | null;
   reportIndexPath: string | null;
+  analysisFile: string | null;
   exists: {
     reportRoot: boolean;
     dataDir: boolean;
@@ -54,10 +55,15 @@ export const DEFAULT_REPORTS_HUB_BASE_URL = process.env.PLAYWRIGHT_REPORTS_BASE_
 
 class ReportHubUnavailableError extends Error {
   constructor(
-    public readonly capability: 'search' | 'prepare',
+    public readonly capability: 'search' | 'prepare' | 'vault-read',
     public readonly baseUrl: string,
   ) {
-    const action = capability === 'search' ? 'Report search' : 'Report preparation';
+    const actionMap: Record<string, string> = {
+      'search': 'Report search',
+      'prepare': 'Report preparation',
+      'vault-read': 'Vault file reading',
+    };
+    const action = actionMap[capability];
     super(`${action} is not available because the report hub is not reachable at ${baseUrl}.`);
     this.name = 'ReportHubUnavailableError';
   }
@@ -178,4 +184,28 @@ export async function prepareReportViaHub(baseUrl: string, reportRef: string): P
     }
     throw error;
   }
+}
+
+export async function readVaultViaHub(baseUrl: string, filename: string): Promise<string> {
+  const normalizedBaseUrl = normalizeHubBaseUrl(baseUrl);
+  const url = `${normalizedBaseUrl}/api/agent/vault/${encodeURIComponent(filename)}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new ReportHubUnavailableError('vault-read', normalizedBaseUrl);
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Vault file "${filename}" was not found on the report hub.`);
+    }
+    throw new Error(`Failed to read vault file: hub returned status ${response.status}`);
+  }
+
+  return await response.text();
 }

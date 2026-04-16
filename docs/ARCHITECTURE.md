@@ -18,7 +18,7 @@ This document describes the current architecture of `playwright-traces-reader` a
 
 It does not own report inventory, metadata persistence, remote storage access, or historical report catalog behavior. Those concerns belong outside this package.
 
-It can, however, query an external local `playwright-reports` hub for thin discovery and preparation steps before parsing begins. That does not make this package the source of truth for report search; it remains a consumer of that external catalog.
+It can, however, query an external local `playwright-reports` hub for thin discovery and preparation steps before parsing begins. It can also read vault analysis markdown files from the hub when reports have associated notes. That does not make this package the source of truth for report search or vault storage; it remains a consumer of that external catalog.
 
 ## Supported Inputs
 

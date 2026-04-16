@@ -521,10 +521,32 @@ Each screenshot item includes:
 - `height`
 - `savedPath`
 
+### `vault-read`
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "vault-read",
+  "filename": "my-report-name",
+  "content": "# Analysis\n\nMarkdown content of the vault file..."
+}
+```
+
+Payload fields:
+
+- `filename` — vault file name without `.md` extension
+- `content` — raw markdown content of the file
+
+Notes:
+
+- Default output format is `text` (raw markdown), not `json`
+- Discovery: the `analysisFile` field in report descriptors from `search-reports` indicates whether a vault file exists
+
 ## Stability Notes
 
 - Phase 1 locks the command envelope shape and payload field names.
 - `summary`, `slow-steps`, `steps`, `network`, `dom`, `timeline`, and `screenshots` currently mirror the exported parser data structures used by the CLI.
 - `failures` is intentionally different: it is a compact CLI-specific triage contract, not a direct `TraceSummary[]` mirror.
 - `find-traces` is a lightweight discovery contract returning trace identity and path data from report metadata, without loading trace contents.
+- `vault-read` is a hub-proxied read command; content is not parsed by this package.
 - If a future change needs to break one of these contracts, bump `schemaVersion` and document the migration.

@@ -24,6 +24,7 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | `init-skills` | repo | Scaffold the Copilot skill |
 | `search-reports` | hub | Search reports through a local playwright-reports hub |
 | `prepare-report` | hub | Resolve one hub report reference into a local path |
+| `vault-read` | hub | Read a vault analysis markdown file from the hub |
 | `failures` | report | Return unique failing tests across a report |
 | `find-traces` | report | Find trace paths for tests matching a name pattern |
 | `summary` | trace | Return one complete summary for a single trace |
@@ -135,6 +136,31 @@ Behavior:
 - resolves one selected report through the hub
 - returns local `reportRootPath` and `reportDataPath` when available
 - intended to be followed by traditional parser commands like `failures`, `summary`, `network`, `dom`, or `timeline`
+
+## `vault-read`
+
+Reads a vault analysis markdown file from the `playwright-reports` hub.
+
+Usage:
+
+```bash
+npx playwright-traces-reader vault-read <filename> [--base-url <url>] [--format json|text]
+```
+
+Examples:
+
+```bash
+npx playwright-traces-reader vault-read my-report-name
+npx playwright-traces-reader vault-read my-report-name --format json
+```
+
+Behavior:
+
+- retrieves the raw markdown content of a vault `.md` file through the hub
+- the `filename` argument is the vault name without the `.md` extension (matches the report `id`)
+- default output format is `text` (raw markdown to stdout); use `--format json` for envelope output
+- discovery: use `search-reports` first — the `analysisFile` field in each report descriptor indicates whether a vault file exists
+- agents should use this command instead of `read_file` since vault files typically live outside the IDE workspace
 
 ## `failures`
 

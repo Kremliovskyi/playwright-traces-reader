@@ -9,6 +9,7 @@ See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON o
 ## Features
 
 - Search a local `playwright-reports` hub for reports by metadata, date, and recency before parsing (`search-reports`, `prepare-report`)
+- Read vault analysis markdown files from the hub when reports have associated analysis notes (`vault-read`)
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
 - One-call failure summary: title, error, step tree, slowest steps, API calls, issues, related-action diagnostics, and DOM snapshot at failure (`getSummary`)
 - Extract test steps with timings and errors (`getTestSteps`, `getTopLevelFailures`)
@@ -42,12 +43,14 @@ npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader find-traces ./playwright-report "test name"
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
+npx playwright-traces-reader vault-read <analysisFile>
 ```
 
 Phase 1 commands:
 
 - `search-reports [query]` — search a local `playwright-reports` hub by metadata/date/recency
 - `prepare-report <reportRef>` — resolve a searched report into local analysis-ready paths
+- `vault-read <filename>` — read a vault analysis markdown file from the hub
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
 - `failures <reportPath>` — report-level unique failing test analysis
 - `find-traces <reportPath> <grep>` — find trace paths for tests matching a name pattern
@@ -77,6 +80,8 @@ JSON responses are versioned envelopes documented in [CLI_JSON_CONTRACTS.md](doc
 Hub-assisted discovery details:
 
 - `search-reports` and `prepare-report` talk to a local `playwright-reports` hub.
+- Report descriptors include an `analysisFile` field (non-null when a vault `.md` file exists for that report).
+- `vault-read` retrieves vault analysis file content through the hub, bypassing workspace file access restrictions.
 - Default hub URL: `http://127.0.0.1:9333`
 - Override with `--base-url <url>` or `PLAYWRIGHT_REPORTS_BASE_URL`
 - If no report is specified by path, `reportRef`, metadata, date, or recency hint, the default local analysis target should be `./playwright-report`
@@ -106,6 +111,7 @@ npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures <reportRootPath>
 npx playwright-traces-reader summary <tracePath>
+npx playwright-traces-reader vault-read <analysisFile>
 ```
 
 Use `--format text` only when you explicitly want terminal-oriented output instead of the default JSON response.

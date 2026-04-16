@@ -35,8 +35,9 @@ export function formatSearchReportsText(reports: HubReportDescriptor[]): string 
   if (reports.length === 0) return 'No reports matched the search.';
 
   return reports.map((report, index) => {
+    const analysisTag = report.analysisFile ? ' [analysis]' : '';
     return [
-      `${index + 1}. ${report.createdAt} [${report.scope}] ${report.id}`,
+      `${index + 1}. ${report.createdAt} [${report.scope}]${analysisTag} ${report.id}`,
       `   Metadata: ${report.metadata || '-'}`,
       `   Report ref: ${report.reportRef}`,
       `   Report root: ${report.reportRootPath || '-'}`,
@@ -53,6 +54,10 @@ export function formatPrepareReportText(report: HubReportDescriptor, mode: strin
     `Report root: ${report.reportRootPath || '-'}`,
     `Data dir: ${report.reportDataPath || '-'}`,
   ].join('\n');
+}
+
+export function formatVaultReadText(content: string): string {
+  return content;
 }
 
 export function formatFailuresText(failures: FailureListItem[], patterns?: ReportFailurePatterns): string {

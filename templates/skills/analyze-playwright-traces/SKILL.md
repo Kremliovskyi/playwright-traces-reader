@@ -113,6 +113,35 @@ npx playwright-traces-reader failures <reportRootPath>
 npx playwright-traces-reader summary <tracePath>
 ```
 
+### Vault analysis files
+
+Reports may have an associated markdown analysis file stored in the dashboard vault. When `search-reports` or `prepare-report` returns a report descriptor, the `analysisFile` field indicates whether a vault `.md` file exists for that report. If `analysisFile` is `null`, no analysis file is available.
+
+Use `vault-read` to retrieve the content of an analysis file by name:
+
+```bash
+npx playwright-traces-reader vault-read <analysisFile>
+```
+
+- `--base-url <url>` points to the local `playwright-reports` hub. Default: `http://127.0.0.1:9333`.
+- `-f, --format <format>` controls output format: `json` or `text` (default: `text`).
+
+Text format outputs the raw markdown content directly. JSON format wraps it in an envelope:
+
+```json
+{ "schemaVersion": 1, "command": "vault-read", "filename": "...", "content": "..." }
+```
+
+Typical flow: discover a report, then read its analysis file if one exists.
+
+```bash
+npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+# → check analysisFile field in the response
+npx playwright-traces-reader vault-read <analysisFile>
+```
+
+The agent cannot access vault files directly with `read_file` because they are stored outside the workspace. Always use `vault-read` through the terminal to retrieve vault content.
+
 ### Report-level analysis
 
 Use `failures` when the user wants all unique failing tests in a report.

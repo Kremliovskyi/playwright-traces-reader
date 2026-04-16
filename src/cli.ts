@@ -23,6 +23,7 @@ import {
   loadReportMetadataForTrace,
   parsePositiveInteger,
   prepareReportViaHub,
+  readVaultViaHub,
   resolveReportDataDir,
   searchReportsViaHub,
 } from './cli/helpers';
@@ -45,6 +46,7 @@ import {
   formatStepsText,
   formatSummaryText,
   formatTimelineText,
+  formatVaultReadText,
   type OutputFormat,
 } from './cli/formatters';
 import {
@@ -65,6 +67,7 @@ import {
   createStepsCommandJson,
   createSummaryCommandJson,
   createTimelineCommandJson,
+  createVaultReadCommandJson,
 } from './cli/json';
 import type { DomSnapshotOptions } from './index';
 import type { FailureListItem } from './cli/json';
@@ -166,6 +169,16 @@ function buildProgram(io: CliIo): Command {
         createPrepareReportCommandJson(response.report, response.mode),
         formatPrepareReportText(response.report, response.mode),
       );
+    });
+
+  program
+    .command('vault-read <filename>')
+    .description('Read a vault analysis markdown file from the playwright-reports hub')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'text')
+    .option('--base-url <url>', 'Base URL for the playwright-reports hub', DEFAULT_REPORTS_HUB_BASE_URL)
+    .action(async (filename: string, options: { format: OutputFormat; baseUrl: string }) => {
+      const content = await readVaultViaHub(options.baseUrl, filename);
+      emitOutput(io, options.format, createVaultReadCommandJson(filename, content), formatVaultReadText(content));
     });
 
   program
