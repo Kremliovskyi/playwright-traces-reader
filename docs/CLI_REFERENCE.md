@@ -144,7 +144,7 @@ Reads a vault analysis markdown file from the `playwright-reports` hub.
 Usage:
 
 ```bash
-npx playwright-traces-reader vault-read <filename> [--base-url <url>] [--format json|text]
+npx playwright-traces-reader vault-read <filename> [--base-url <url>] [--format json|text] [--out <path>]
 ```
 
 Examples:
@@ -152,6 +152,7 @@ Examples:
 ```bash
 npx playwright-traces-reader vault-read my-report-name
 npx playwright-traces-reader vault-read my-report-name --format json
+npx playwright-traces-reader vault-read my-report-name --out ./tmp/analysis.md
 ```
 
 Behavior:
@@ -159,6 +160,7 @@ Behavior:
 - retrieves the raw markdown content of a vault `.md` file through the hub
 - the `filename` argument is the vault name without the `.md` extension (matches the report `id`)
 - default output format is `text` (raw markdown to stdout); use `--format json` for envelope output
+- `--out <path>` writes content to a file instead of stdout, useful for large files or when subsequent `read_file` access is needed
 - discovery: use `search-reports` first — the `analysisFile` field in each report descriptor indicates whether a vault file exists
 - agents should use this command instead of `read_file` since vault files typically live outside the IDE workspace
 

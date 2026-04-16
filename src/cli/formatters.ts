@@ -60,6 +60,10 @@ export function formatVaultReadText(content: string): string {
   return content;
 }
 
+export function formatVaultReadSavedText(filename: string, savedPath: string): string {
+  return `Vault file "${filename}" saved to ${savedPath}`;
+}
+
 export function formatFailuresText(failures: FailureListItem[], patterns?: ReportFailurePatterns): string {
   if (failures.length === 0) return 'No failing tests found.';
 

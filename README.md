@@ -50,7 +50,7 @@ Phase 1 commands:
 
 - `search-reports [query]` — search a local `playwright-reports` hub by metadata/date/recency
 - `prepare-report <reportRef>` — resolve a searched report into local analysis-ready paths
-- `vault-read <filename>` — read a vault analysis markdown file from the hub
+- `vault-read <filename>` — read a vault analysis markdown file from the hub (supports `--out` to save to a local file)
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
 - `failures <reportPath>` — report-level unique failing test analysis
 - `find-traces <reportPath> <grep>` — find trace paths for tests matching a name pattern

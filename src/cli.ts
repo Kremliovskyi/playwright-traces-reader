@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import * as fs from 'fs';
+import * as path from 'path';
 import { Command, CommanderError, InvalidArgumentError } from 'commander';
 import {
   extractAttachment,
@@ -47,6 +49,7 @@ import {
   formatSummaryText,
   formatTimelineText,
   formatVaultReadText,
+  formatVaultReadSavedText,
   type OutputFormat,
 } from './cli/formatters';
 import {
@@ -176,9 +179,16 @@ function buildProgram(io: CliIo): Command {
     .description('Read a vault analysis markdown file from the playwright-reports hub')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'text')
     .option('--base-url <url>', 'Base URL for the playwright-reports hub', DEFAULT_REPORTS_HUB_BASE_URL)
-    .action(async (filename: string, options: { format: OutputFormat; baseUrl: string }) => {
+    .option('-o, --out <path>', 'Write content to a file instead of stdout')
+    .action(async (filename: string, options: { format: OutputFormat; baseUrl: string; out?: string }) => {
       const content = await readVaultViaHub(options.baseUrl, filename);
-      emitOutput(io, options.format, createVaultReadCommandJson(filename, content), formatVaultReadText(content));
+      if (options.out) {
+        const savedPath = path.resolve(options.out);
+        await fs.promises.writeFile(savedPath, content, 'utf-8');
+        emitOutput(io, options.format, createVaultReadCommandJson(filename, content, savedPath), formatVaultReadSavedText(filename, savedPath));
+      } else {
+        emitOutput(io, options.format, createVaultReadCommandJson(filename, content), formatVaultReadText(content));
+      }
     });
 
   program

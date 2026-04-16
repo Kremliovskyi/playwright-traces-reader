@@ -125,11 +125,12 @@ npx playwright-traces-reader vault-read <analysisFile>
 
 - `--base-url <url>` points to the local `playwright-reports` hub. Default: `http://127.0.0.1:9333`.
 - `-f, --format <format>` controls output format: `json` or `text` (default: `text`).
+- `-o, --out <path>` writes content to a file instead of stdout. Use this when the analysis file may be large or when you need to read it with `read_file` afterwards.
 
 Text format outputs the raw markdown content directly. JSON format wraps it in an envelope:
 
 ```json
-{ "schemaVersion": 1, "command": "vault-read", "filename": "...", "content": "..." }
+{ "schemaVersion": 1, "command": "vault-read", "filename": "...", "content": "...", "savedPath": null }
 ```
 
 Typical flow: discover a report, then read its analysis file if one exists.
@@ -140,7 +141,13 @@ npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
 npx playwright-traces-reader vault-read <analysisFile>
 ```
 
-The agent cannot access vault files directly with `read_file` because they are stored outside the workspace. Always use `vault-read` through the terminal to retrieve vault content.
+For large analysis files, save to a workspace file first, then read with `read_file`:
+
+```bash
+npx playwright-traces-reader vault-read <analysisFile> --out ./tmp/analysis.md
+```
+
+The agent cannot access vault files directly with `read_file` because they are stored outside the workspace. Always use `vault-read` through the terminal to retrieve vault content, or use `--out` to save it into the workspace first.
 
 ### Report-level analysis
 

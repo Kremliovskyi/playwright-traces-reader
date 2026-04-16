@@ -528,7 +528,8 @@ Each screenshot item includes:
   "schemaVersion": 1,
   "command": "vault-read",
   "filename": "my-report-name",
-  "content": "# Analysis\n\nMarkdown content of the vault file..."
+  "content": "# Analysis\n\nMarkdown content of the vault file...",
+  "savedPath": null
 }
 ```
 
@@ -536,6 +537,7 @@ Payload fields:
 
 - `filename` — vault file name without `.md` extension
 - `content` — raw markdown content of the file
+- `savedPath` — absolute path where the file was saved when `--out` was used, `null` otherwise
 
 Notes:
 

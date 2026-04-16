@@ -157,6 +157,7 @@ export interface VaultReadCommandJson {
   command: 'vault-read';
   filename: string;
   content: string;
+  savedPath: string | null;
 }
 
 export type CliCommandJson =
@@ -331,11 +332,12 @@ export function createFindTracesCommandJson(traces: FoundTrace[]): FindTracesCom
   };
 }
 
-export function createVaultReadCommandJson(filename: string, content: string): VaultReadCommandJson {
+export function createVaultReadCommandJson(filename: string, content: string, savedPath?: string): VaultReadCommandJson {
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'vault-read',
     filename,
     content,
+    savedPath: savedPath ?? null,
   };
 }
