@@ -61,6 +61,7 @@ import {
   createRequestCommandJson,
   createSearchReportsCommandJson,
   createDomCommandJson,
+  createDomConfirmationJson,
   createErrorsCommandJson,
   createFailuresCommandJson,
   createFindTracesCommandJson,
@@ -410,14 +411,15 @@ function buildProgram(io: CliIo): Command {
 
   program
     .command('dom <tracePath>')
-    .description('Inspect DOM snapshots for a single trace')
+    .description('Inspect DOM snapshots for a single trace (always writes to file)')
+    .requiredOption('-o, --output <path>', 'Output file path to write DOM snapshots into')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--near <near>', 'Return snapshots near a callId, or use "last"')
     .option('--phase <phase>', 'Filter to before, action, or after phase')
     .option('-n, --limit <count>', 'Maximum number of action snapshots to return', parsePositiveInteger)
     .action(async (
       tracePath: string,
-      options: { format: OutputFormat; near?: string; phase?: 'before' | 'action' | 'after'; limit?: number },
+      options: { format: OutputFormat; output: string; near?: string; phase?: 'before' | 'action' | 'after'; limit?: number },
     ) => {
       if (options.phase && !['before', 'action', 'after'].includes(options.phase)) {
         throw new Error(`Invalid phase: ${options.phase}. Expected before, action, or after.`);
@@ -431,7 +433,15 @@ function buildProgram(io: CliIo): Command {
 
       const domSnapshots = await getDomSnapshots(traceContext, domOptions);
 
-      emitOutput(io, options.format, createDomCommandJson(domSnapshots), formatDomSnapshotsText(domSnapshots));
+      const outputPath = path.resolve(options.output);
+      await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+
+      const fileContent = options.format === 'json'
+        ? JSON.stringify(createDomCommandJson(domSnapshots, outputPath), null, 2)
+        : formatDomSnapshotsText(domSnapshots);
+      await fs.promises.writeFile(outputPath, fileContent + '\n', 'utf8');
+
+      emitOutput(io, 'json', createDomConfirmationJson(domSnapshots, outputPath), `DOM snapshots written to ${outputPath} (${domSnapshots.length} actions)`);
     });
 
   program

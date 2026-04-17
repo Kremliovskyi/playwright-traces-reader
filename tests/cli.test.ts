@@ -109,6 +109,12 @@ describe('playwright-traces-reader CLI', () => {
     expect(Array.isArray(summary.networkCalls)).toBe(true);
     expect(Array.isArray(summary.issues)).toBe(true);
     expect(Array.isArray(summary.actionDiagnostics)).toBe(true);
+    const domRef = summary.failureDomSnapshot as { callId: string; phases: string[]; timestamp: number } | null;
+    expect(domRef).not.toBeNull();
+    expect(domRef!.callId).toBe(fixture.traces.failedLatest.rootCallId);
+    expect(Array.isArray(domRef!.phases)).toBe(true);
+    expect(typeof domRef!.timestamp).toBe('number');
+    expect(domRef).not.toHaveProperty('html');
   });
 
   test('summary command works for a passed trace', async () => {
@@ -268,17 +274,33 @@ describe('playwright-traces-reader CLI', () => {
     }
   });
 
-  test('dom command returns filtered JSON snapshots', async () => {
-    const result = await execCli(['dom', fixture.traces.failedLatest.tracePath, '--near', 'last', '--limit', '2']);
+  test('dom command writes snapshots to file and returns confirmation on stdout', async () => {
+    const outPath = path.join(os.tmpdir(), 'pw-traces-reader-cli-dom', `${Date.now()}.json`);
 
-    expect(result.exitCode).toBe(0);
+    try {
+      const result = await execCli(['dom', fixture.traces.failedLatest.tracePath, '--output', outPath, '--near', 'last', '--limit', '2']);
 
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
-    expect(payload.command).toBe('dom');
-    const snapshots = payload.snapshots as Array<Record<string, unknown>>;
-    expect(snapshots.length).toBe(1);
-    expect(snapshots[0]).toHaveProperty('callId');
+      expect(result.exitCode).toBe(0);
+
+      // Stdout has lightweight confirmation
+      const confirmation = JSON.parse(result.stdout) as Record<string, unknown>;
+      expect(confirmation.schemaVersion).toBe(1);
+      expect(confirmation.command).toBe('dom');
+      expect(confirmation.savedPath).toBe(outPath);
+      expect(Array.isArray(confirmation.callIds)).toBe(true);
+      expect(confirmation).not.toHaveProperty('snapshots');
+
+      // File has full snapshots
+      expect(fs.existsSync(outPath)).toBe(true);
+      const filePayload = JSON.parse(fs.readFileSync(outPath, 'utf8')) as Record<string, unknown>;
+      expect(filePayload.command).toBe('dom');
+      expect(filePayload.savedPath).toBe(outPath);
+      const snapshots = filePayload.snapshots as Array<Record<string, unknown>>;
+      expect(snapshots.length).toBe(1);
+      expect(snapshots[0]).toHaveProperty('callId');
+    } finally {
+      await fs.promises.rm(path.dirname(outPath), { recursive: true, force: true });
+    }
   });
 
   test('timeline command returns merged JSON entries', async () => {

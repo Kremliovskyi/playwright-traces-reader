@@ -131,8 +131,9 @@ export function formatSummaryText(summary: TraceSummary): string {
   }
 
   if (summary.failureDomSnapshot) {
-    lines.push('Failure DOM snapshot:');
-    lines.push(indentBlock(formatDomSnapshotsText([summary.failureDomSnapshot]), 2));
+    const ref = summary.failureDomSnapshot;
+    lines.push(`Failure DOM snapshot: callId=${ref.callId} phases=[${ref.phases.join(', ')}] frameUrl=${ref.frameUrl ?? '-'}`);
+    lines.push('  Use: dom <tracePath> --near ' + ref.callId + ' --output <path>');
   }
 
   return lines.join('\n');

@@ -19,7 +19,7 @@ See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON o
 - Extract browser console, page errors, and stdio output (`getConsoleEntries`, `getTraceIssues`)
 - List and extract trace attachments (`getAttachments`, `extractAttachment`)
 - Save screenshots from screencasts for human visual inspection (`extractScreenshots`)
-- Extract full DOM snapshots (before / during / after each action) with back-reference resolution and filtering options (`getDomSnapshots`)
+- Extract full DOM snapshots (before / during / after each action) with back-reference resolution and filtering options (`getDomSnapshots`); the `dom` CLI command always writes to a file (`--output` required) and returns a lightweight confirmation on stdout
 - Merged chronological timeline of steps, screenshots, DOM snapshots, and network calls (`getTimeline`)
 - Reliable unique test title for deduplication across retries (`getTestTitle`)
 - Find traces for any test by name pattern, including passed tests, with outcome filtering (`findTraces`)
@@ -61,7 +61,7 @@ Phase 1 commands:
 - `request <tracePath> <requestId>` — inspect one network request in detail
 - `console <tracePath>` — browser console, page errors, stdout, and stderr
 - `errors <tracePath>` — failed steps, page errors, and trace-level issues
-- `dom <tracePath>` — DOM snapshots before, during, and after actions
+- `dom <tracePath> --output <path>` — DOM snapshots before, during, and after actions (always writes to file)
 - `timeline <tracePath>` — merged chronological trace timeline
 - `attachments <tracePath>` — attachment manifest for a trace
 - `attachment <tracePath> <attachmentId>` — extract one attachment
@@ -196,8 +196,9 @@ for (const f of failures) {
     console.log(`  ${call.method} ${call.url} → ${call.status}`);
   }
 
-  if (f.failureDomSnapshot?.after) {
-    console.log('DOM at failure:', f.failureDomSnapshot.after.html.slice(0, 500));
+  if (f.failureDomSnapshot) {
+    console.log(`DOM ref: callId=${f.failureDomSnapshot.callId} phases=${f.failureDomSnapshot.phases}`);
+    // Use getDomSnapshots() with { near: f.failureDomSnapshot.callId } to fetch full HTML
   }
 }
 ```
@@ -405,7 +406,7 @@ The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 | `networkCalls` | `NetworkEntry[]` | All HTTP calls (`source: 'api'` = Node.js `APIRequestContext`; `source: 'browser'` = XHR / fetch / navigation) |
 | `issues` | `TraceIssue[]` | Step failures, page errors, and trace-level issues for the trace |
 | `actionDiagnostics` | `ActionDiagnosticSummary[]` | Aggregated request and issue counts grouped by related browser action |
-| `failureDomSnapshot` | `ActionDomSnapshots \| null` | DOM snapshot closest in time to the failure, or `null` |
+| `failureDomSnapshot` | `FailureDomSnapshotRef \| null` | Lightweight metadata reference (callId, phases, timestamp, frameUrl) to the DOM snapshot closest to the failure. Use `getDomSnapshots()` or the `dom` CLI command with `--near <callId>` to retrieve full HTML. `null` for passed traces or when no snapshots exist. |
 
 ### `getReportFailurePatterns(reportDataDir, options?)`
 

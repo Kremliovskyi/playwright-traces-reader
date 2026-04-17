@@ -196,7 +196,23 @@ Important `summary` fields:
 - `networkCalls`
 - `issues`
 - `actionDiagnostics`
-- `failureDomSnapshot`
+- `failureDomSnapshot` — lightweight metadata reference (not the full HTML); use `dom --near <callId> --output <path>` to retrieve full snapshots
+
+`failureDomSnapshot` fields (when non-null):
+
+- `callId` — action callId, pass to `dom --near <callId>`
+- `phases` — array of available phases (`before`, `action`, `after`)
+- `timestamp` — wall-clock timestamp of the primary phase
+- `frameUrl` — frame URL from the primary phase
+- `targetElement` — targeted element's callId, if any — lightweight metadata reference (not the full HTML); use `dom --near <callId> --output <path>` to retrieve full snapshots
+
+`failureDomSnapshot` fields (when non-null):
+
+- `callId` — action callId, pass to `dom --near <callId>`
+- `phases` — array of available phases (`before`, `action`, `after`)
+- `timestamp` — wall-clock timestamp of the primary phase
+- `frameUrl` — frame URL from the primary phase
+- `targetElement` — targeted element's callId, if any
 
 `summary` is the deep-inspection payload. Unlike `failures`, it intentionally keeps the full trace analysis shape.
 
@@ -370,30 +386,78 @@ Important error fields:
 - `source`
 - `message`
 - `name`
-- `stack`
-- `timestamp`
-- `callId`
-- `title`
-- `location`
+The `dom` command always writes full snapshots to a file (`--output` is required). Stdout receives a lightweight confirmation.
 
-### `dom`
+**File content** (written to `--output` path):
 
 ```json
 {
   "schemaVersion": 1,
   "command": "dom",
   "count": 2,
+  "savedPath": "/tmp/dom-snapshots.json",
   "snapshots": [
     {
       "callId": "call@123",
       "before": null,
+      "action": { "html": "..." },
       "after": null
     }
   ]
 }
 ```
 
-Payload field:
+**Stdout confirmation**:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "dom",
+  "count": 2,
+  "savedPath": "/tmp/dom-snapshots.json",
+  "callIds": ["call@123", "call@456"]
+}
+```
+
+Stdout confirmation fields:
+
+- `count` — number of action snapshot groups written
+- `savedPath` — absolute path to the output file
+- `callIds` — list of action callIds in the file
+
+File payload fields"dom",
+  "count": 2,
+  "savedPath": "/tmp/dom-snapshots.json",
+  "snapshots": [
+    {
+      "callId": "call@123",
+      "before": null,
+      "action": { "html": "..." },
+      "after": null
+    }
+  ]
+}
+```
+
+**Stdout confirmation**:
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "dom",
+  "count": 2,
+  "savedPath": "/tmp/dom-snapshots.json",
+  "callIds": ["call@123", "call@456"]
+}
+```
+
+Stdout confirmation fields:
+
+- `count` — number of action snapshot groups written
+- `savedPath` — absolute path to the output file
+- `callIds` — list of action callIds in the file
+
+File payload fields:
 
 - `snapshots` — array of `ActionDomSnapshots` objects
 

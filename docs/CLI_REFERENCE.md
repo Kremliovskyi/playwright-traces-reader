@@ -389,26 +389,34 @@ npx playwright-traces-reader errors ./playwright-report/data/<sha1> --format tex
 
 ## `dom`
 
-Returns DOM snapshots for one trace.
+Writes DOM snapshots for one trace to a file.
 
 Usage:
 
 ```bash
-npx playwright-traces-reader dom <tracePath> [--near <value>] [--phase before|action|after] [--limit <count>] [--format json|text]
+npx playwright-traces-reader dom <tracePath> --output <path> [--near <value>] [--phase before|action|after] [--limit <count>] [--format json|text]
 ```
 
 Options:
 
+- `--output <path>` (required) output file path for DOM snapshots
 - `--near last` returns the tail of the snapshot sequence
 - `--near <callId>` returns a window around a specific action
 - `--phase` filters to one snapshot phase
 - `--limit` bounds the number of action groups returned
+- `--format` controls the file content format (json or text)
+
+Stdout receives a lightweight JSON confirmation with `savedPath`, `count`, and `callIds` — never the full HTML.
 
 Examples:
 
 ```bash
-npx playwright-traces-reader dom ./playwright-report/data/<sha1> --near last --limit 3
-npx playwright-traces-reader dom ./playwright-report/data/<sha1> --phase after
+npx playwright-traces-reader dom ./playwright-report/data/<sha1> --output /tmp/dom.json --near last --limit 3
+npx playwright-traces-reader dom ./playwright-report/data/<sha1> --output /tmp/dom.txt --phase after --format text
+
+```bash
+npx playwright-traces-reader dom ./playwright-report/data/<sha1> --output /tmp/dom.json --near last --limit 3
+npx playwright-traces-reader dom ./playwright-report/data/<sha1> --output /tmp/dom.txt --phase after --format text
 ```
 
 ## `timeline`

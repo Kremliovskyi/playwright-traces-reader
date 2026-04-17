@@ -158,6 +158,7 @@ Important current behavior:
 - `getSummary()` works for both passed and failed traces.
 - `getSummary()` filters hook roots out of `topLevelSteps`.
 - `getSummary()` includes `issues` and aggregated `actionDiagnostics` alongside step, network, and DOM data.
+- `getSummary()` returns a lightweight `FailureDomSnapshotRef` (callId, phases, timestamp, frameUrl, targetElement) instead of full DOM HTML. Agents use the `dom` command with `--near <callId>` to retrieve full snapshots on demand.
 - `getSummary()` uses report metadata when available to populate `outcome`.
 - `getFailedTestSummaries()` uses `getTopLevelFailures()` as a cheap pre-filter before building full summaries.
 - `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
@@ -187,7 +188,7 @@ Command surface:
 - `request <tracePath> <requestId>`
 - `console <tracePath>`
 - `errors <tracePath>`
-- `dom <tracePath>`
+- `dom <tracePath>` — requires `--output <path>`; writes full DOM snapshots to a file and emits a lightweight confirmation on stdout
 - `timeline <tracePath>`
 - `attachments <tracePath>`
 - `attachment <tracePath> <attachmentId>`
@@ -209,7 +210,8 @@ Current CLI contract choices:
 - JSON is the default output mode for all commands.
 - `search-reports` and `prepare-report` are discovery commands that stop at local path resolution.
 - `failures` is intentionally compact and returns CLI-specific triage records plus report-level repeated failure patterns.
-- `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics.
+- `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics. The `failureDomSnapshot` field is a lightweight metadata reference (callId, phases, timestamp, frameUrl) rather than full HTML, keeping the JSON payload small.
+- `dom` always writes full DOM snapshots to a file (`--output` is required). Stdout receives a lightweight confirmation with `savedPath`, `count`, and `callIds` — never the full HTML.
 - `network` is the listing surface for discovering per-trace `requestId` values later consumed by `request`.
 - `attachments` is the listing surface for discovering per-trace `attachmentId` values later consumed by `attachment`.
 - `find-traces` is a lightweight metadata-only discovery command. It reads report metadata from `index.html`, matches tests by literal case-insensitive substring, and returns trace paths without opening any trace files. It supports `--outcome` filtering and returns all retries for matched tests.

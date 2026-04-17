@@ -736,6 +736,24 @@ export interface ActionDomSnapshots {
 }
 
 /**
+ * Lightweight metadata reference to the DOM snapshot closest to the failure.
+ * Does NOT contain the full HTML — use the `dom` CLI command with
+ * `--near <callId>` to retrieve the actual snapshots.
+ */
+export interface FailureDomSnapshotRef {
+  /** The action's callId — pass to `dom --near <callId>` to retrieve full HTML. */
+  callId: string;
+  /** Which snapshot phases are available for this action. */
+  phases: Array<'before' | 'action' | 'after'>;
+  /** Wall-clock timestamp of the primary phase snapshot. */
+  timestamp: number;
+  /** Frame URL from the primary phase, if available. */
+  frameUrl: string | null;
+  /** The targeted element's callId, if any. */
+  targetElement: string | null;
+}
+
+/**
  * Optional filtering options for getDomSnapshots().
  *
  * @param near   `'last'` returns the last `limit` entries (default 5).
@@ -1534,8 +1552,8 @@ export interface TraceSummary {
   issues: TraceIssue[];
   /** Aggregated diagnostics per related browser action. */
   actionDiagnostics: ActionDiagnosticSummary[];
-  /** The DOM snapshot (before/action/after) closest in time to the failure, or null if passed. */
-  failureDomSnapshot: ActionDomSnapshots | null;
+  /** Metadata reference to the DOM snapshot closest to the failure, or null if passed. Use `dom --near <callId>` to retrieve full HTML. */
+  failureDomSnapshot: FailureDomSnapshotRef | null;
   /**
    * Test outcome from the HTML report's `report.json` when available.
    * Populated when `reportMetadata` is passed to `getSummary()` or
@@ -1621,14 +1639,28 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
   const networkCalls = network;
   const actionDiagnostics = buildActionDiagnostics(networkCalls, issues);
 
-  let failureDomSnapshot: ActionDomSnapshots | null = null;
+  let failureDomSnapshot: FailureDomSnapshotRef | null = null;
   if (error && mainRoot && domAll.length > 0) {
     const failureTime = mainRoot.endTime ?? mainRoot.startTime;
-    failureDomSnapshot = domAll.reduce((closest, current) => {
+    const closest = domAll.reduce((best, current) => {
       const ct = (current.before ?? current.action ?? current.after)?.timestamp ?? 0;
-      const cct = (closest.before ?? closest.action ?? closest.after)?.timestamp ?? 0;
-      return Math.abs(ct - failureTime) < Math.abs(cct - failureTime) ? current : closest;
+      const cct = (best.before ?? best.action ?? best.after)?.timestamp ?? 0;
+      return Math.abs(ct - failureTime) < Math.abs(cct - failureTime) ? current : best;
     }, domAll[0]!);
+
+    const phases: Array<'before' | 'action' | 'after'> = [];
+    if (closest.before) phases.push('before');
+    if (closest.action) phases.push('action');
+    if (closest.after) phases.push('after');
+    const primary = closest.action ?? closest.before ?? closest.after;
+
+    failureDomSnapshot = {
+      callId: closest.callId,
+      phases,
+      timestamp: primary?.timestamp ?? 0,
+      frameUrl: primary?.frameUrl ?? null,
+      targetElement: primary?.targetElement ?? null,
+    };
   }
 
   return {

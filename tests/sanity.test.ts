@@ -221,6 +221,8 @@ describe('playwright-traces-reader sanity', () => {
     expect(summary.issues.some(issue => issue.relatedAction?.callId === fixture.traces.failedLatest.rootCallId)).toBe(true);
     expect(summary.actionDiagnostics[0]!.action.callId).toBe(fixture.traces.failedLatest.rootCallId);
     expect(summary.failureDomSnapshot?.callId).toBe(fixture.traces.failedLatest.rootCallId);
+    expect(summary.failureDomSnapshot?.phases).toEqual(expect.arrayContaining(['before']));
+    expect(typeof summary.failureDomSnapshot?.timestamp).toBe('number');
   });
 
   test('getSummary returns passed status and no failure DOM for successful traces', async () => {

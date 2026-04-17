@@ -222,7 +222,9 @@ Important behavior:
 
 - `summary` works for both passed and failed traces
 - `summary` includes issues and aggregated related-action diagnostics
-- failed traces may include `failureDomSnapshot`
+- failed traces include `failureDomSnapshot` — a lightweight metadata reference (callId, phases, frameUrl), NOT the full HTML
+- to retrieve full DOM HTML, use `dom --near <callId> --output <path>a lightweight metadata reference (callId, phases, frameUrl), NOT the full HTML
+- to retrieve full DOM HTML, use `dom --near <callId> --output <path>`
 - passed traces return `status: "passed"` and `failureDomSnapshot: null`
 
 ### Slow steps
@@ -300,17 +302,17 @@ npx playwright-traces-reader errors /path/to/playwright-report/data/<sha1>
 ```
 
 ### DOM snapshots
-
-Use `dom` to inspect UI state before, during, or after actions.
+ Output is always written to a file (`--output` is required).
 
 ```bash
-npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --near last --limit 3
+npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --output /tmp/dom.json --near last --limit 3
 ```
 
 Useful filters:
 
 - `--near last`
-- `--near <callId>`
+- `--near <callId>` (use the callId from `failureDomSnapshot` in the summary)
+- `--near <callId>` (use the callId from `failureDomSnapshot` in the summary)
 - `--phase before|action|after`
 - `--limit <count>`
 

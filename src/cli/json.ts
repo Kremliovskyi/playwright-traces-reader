@@ -128,7 +128,16 @@ export interface DomCommandJson {
   schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   command: 'dom';
   count: number;
+  savedPath: string;
   snapshots: ActionDomSnapshots[];
+}
+
+export interface DomConfirmationJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'dom';
+  count: number;
+  savedPath: string;
+  callIds: string[];
 }
 
 export interface TimelineCommandJson {
@@ -175,6 +184,7 @@ export type CliCommandJson =
   | AttachmentsCommandJson
   | AttachmentCommandJson
   | DomCommandJson
+  | DomConfirmationJson
   | TimelineCommandJson
   | ScreenshotsCommandJson
   | FindTracesCommandJson
@@ -296,12 +306,23 @@ export function createAttachmentCommandJson(attachment: SavedAttachment): Attach
   };
 }
 
-export function createDomCommandJson(snapshots: ActionDomSnapshots[]): DomCommandJson {
+export function createDomCommandJson(snapshots: ActionDomSnapshots[], savedPath: string): DomCommandJson {
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'dom',
     count: snapshots.length,
+    savedPath,
     snapshots,
+  };
+}
+
+export function createDomConfirmationJson(snapshots: ActionDomSnapshots[], savedPath: string): DomConfirmationJson {
+  return {
+    schemaVersion: CLI_JSON_SCHEMA_VERSION,
+    command: 'dom',
+    count: snapshots.length,
+    savedPath,
+    callIds: snapshots.map(s => s.callId),
   };
 }
 

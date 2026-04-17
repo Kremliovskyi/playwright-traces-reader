@@ -40,6 +40,7 @@ export type {
   DomSnapshot,
   ActionDomSnapshots,
   DomSnapshotOptions,
+  FailureDomSnapshotRef,
   TimelineEntry,
   TraceSummary,
   GetSummaryOptions,
