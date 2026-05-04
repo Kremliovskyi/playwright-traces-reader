@@ -400,7 +400,13 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
           const sha1 = postData._sha1.replace(/\.bin$/, '');
           const buf = await getResourceBuffer(traceContext, postData._sha1) ??
             await getResourceBuffer(traceContext, sha1);
-          if (buf) requestBody = buf.toString('utf8');
+          if (buf) {
+            if (postData.mimeType.includes('json') || postData.mimeType.includes('text')) {
+              requestBody = buf.toString('utf8');
+            } else {
+              requestBody = `[binary: ${postData.mimeType}, ${buf.length} bytes]`;
+            }
+          }
         }
       }
 
