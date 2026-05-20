@@ -43,7 +43,6 @@ export interface PrepareReportHubResponse {
 export interface SearchReportsHubOptions {
   baseUrl: string;
   query?: string;
-  latest?: boolean;
   scope?: 'current' | 'archive';
   rangeStart?: string;
   rangeEnd?: string;
@@ -150,7 +149,6 @@ export async function searchReportsViaHub(options: SearchReportsHubOptions): Pro
   const params = new URLSearchParams();
 
   if (options.query) params.set('query', options.query);
-  if (options.latest) params.set('latest', 'true');
   if (options.scope) params.set('scope', options.scope);
   if (options.rangeStart) params.set('rangeStart', options.rangeStart);
   if (options.rangeEnd) params.set('rangeEnd', options.rangeEnd);

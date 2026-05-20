@@ -37,7 +37,7 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 The package exposes a local CLI. In a repository that has the package installed, use it with `npx`:
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures ./playwright-report
 npx playwright-traces-reader find-traces ./playwright-report "test name"
@@ -107,7 +107,7 @@ npx playwright-traces-reader summary <tracePath> --report ./playwright-report
 Hub-assisted workflow:
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures <reportRootPath>
 npx playwright-traces-reader summary <tracePath>

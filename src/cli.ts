@@ -116,7 +116,6 @@ function buildProgram(io: CliIo): Command {
     .command('search-reports [query]')
     .description('Search Playwright reports through a local playwright-reports hub and return report references plus local artifact paths')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
-    .option('--latest', 'Prefer the newest matching report', false)
     .option('--scope <scope>', 'Filter by scope: current or archive')
     .option('--range-start <date>', 'Start date filter (YYYY-MM-DD)')
     .option('--range-end <date>', 'End date filter (YYYY-MM-DD)')
@@ -127,7 +126,6 @@ function buildProgram(io: CliIo): Command {
       query: string | undefined,
       options: {
         format: OutputFormat;
-        latest: boolean;
         scope?: 'current' | 'archive';
         rangeStart?: string;
         rangeEnd?: string;
@@ -148,7 +146,6 @@ function buildProgram(io: CliIo): Command {
       };
 
       if (query !== undefined) searchOptions.query = query;
-      if (options.latest) searchOptions.latest = true;
       if (options.scope !== undefined) searchOptions.scope = options.scope;
       if (options.rangeStart !== undefined) searchOptions.rangeStart = options.rangeStart;
       if (options.rangeEnd !== undefined) searchOptions.rangeEnd = options.rangeEnd;

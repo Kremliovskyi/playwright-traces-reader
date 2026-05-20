@@ -1,6 +1,6 @@
 ---
 name: analyze-playwright-traces
-description: Analyze Playwright reports and traces using the playwright-traces-reader CLI, including searching a local playwright-reports hub for runs like latest UAT EU before inspecting failures, single-test summaries, network traffic, DOM snapshots, screenshots, and timelines.
+description: Analyze Playwright reports and traces using the playwright-traces-reader CLI, including searching a local playwright-reports hub for runs like UAT EU before inspecting failures, single-test summaries, network traffic, DOM snapshots, screenshots, and timelines.
 ---
 
 # Analyze Playwright Traces
@@ -67,7 +67,7 @@ npx playwright-traces-reader failures playwright-report/
 Use `search-reports` when the user describes a report by metadata or recency instead of giving a filesystem path.
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 ```
 
 This returns report references plus local report paths when available.
@@ -75,7 +75,6 @@ This returns report references plus local report paths when available.
 Discovery flag meanings:
 
 - `--base-url <url>` points to the local `playwright-reports` hub. Default: `http://127.0.0.1:9333`.
-- `--latest` asks the hub for the newest matching report.
 - `--limit <count>` limits how many matching reports are returned.
 - `--range-start <YYYY-MM-DD>` filters reports created on or after that date.
 - `--range-end <YYYY-MM-DD>` filters reports created on or before that date.
@@ -88,7 +87,7 @@ If the hub is unreachable, `search-reports` and `prepare-report` fail with a dir
 Useful examples:
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader search-reports "UAT EU" --range-start 2026-04-01 --range-end 2026-04-03
 npx playwright-traces-reader search-reports "checkout" --selected-dates 2026-04-02,2026-04-03
 npx playwright-traces-reader search-reports "smoke" --base-url http://127.0.0.1:9333
@@ -107,7 +106,7 @@ Use `prepare-report` when the question changes from "which report matches?" to "
 Example handoff flow:
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures <reportRootPath>
 npx playwright-traces-reader summary <tracePath>
@@ -136,7 +135,7 @@ Text format outputs the raw markdown content directly. JSON format wraps it in a
 Typical flow: discover a report, then read its analysis file if one exists.
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest --limit 1
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 # → check analysisFile field in the response
 npx playwright-traces-reader vault-read <analysisFile>
 ```
@@ -383,7 +382,7 @@ npx playwright-traces-reader init-skills
 ## Example Prompts This Skill Covers
 
 - Analyze the default local Playwright report and list failures.
-- Find the latest UAT EU report and list failing tests.
+- Find the UAT EU report and list failing tests.
 - Find checkout reports from `2026-04-01` through `2026-04-03` and prepare the newest one.
 - Resolve this `reportRef` and summarize the failing trace.
 - Use the reports hub at `http://127.0.0.1:9333` to find the most recent smoke run.

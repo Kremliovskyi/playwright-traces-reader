@@ -98,13 +98,13 @@ Searches reports through a local `playwright-reports` hub.
 Usage:
 
 ```bash
-npx playwright-traces-reader search-reports [query] [--latest] [--scope current|archive] [--range-start <date>] [--range-end <date>] [--selected-dates <dates>] [--limit <count>] [--base-url <url>] [--format json|text]
+npx playwright-traces-reader search-reports [query] [--scope current|archive] [--range-start <date>] [--range-end <date>] [--selected-dates <dates>] [--limit <count>] [--base-url <url>] [--format json|text]
 ```
 
 Examples:
 
 ```bash
-npx playwright-traces-reader search-reports "UAT EU" --latest
+npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader search-reports smoke --scope archive --limit 5 --format text
 ```
 
