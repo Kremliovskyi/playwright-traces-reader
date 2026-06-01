@@ -10,6 +10,7 @@ See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON o
 
 - Search a local `playwright-reports` hub for reports by metadata, date, and recency before parsing (`search-reports`, `prepare-report`)
 - Read vault analysis markdown files from the hub when reports have associated analysis notes (`vault-read`)
+- Digest every failing attempt in a report into one self-contained folder on disk — `failure.json`, extracted screenshots, network/console errors, and a cleaned `error.md` — plus an `index.json` manifest (`failures` CLI command)
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
 - One-call failure summary: title, error, step tree, slowest steps, API calls, issues, related-action diagnostics, and DOM snapshot at failure (`getSummary`)
 - Extract test steps with timings and errors (`getTestSteps`, `getTopLevelFailures`)
@@ -39,7 +40,7 @@ The package exposes a local CLI. In a repository that has the package installed,
 ```bash
 npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
-npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis
 npx playwright-traces-reader find-traces ./playwright-report "test name"
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
@@ -52,7 +53,7 @@ Phase 1 commands:
 - `prepare-report <reportRef>` — resolve a searched report into local analysis-ready paths
 - `vault-read <filename>` — read a vault analysis markdown file from the hub (supports `--out` to save to a local file)
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
-- `failures <reportPath>` — report-level unique failing test analysis
+- `failures <reportPath> <outputDir>` — digest failing attempts into self-contained folders on disk
 - `find-traces <reportPath> <grep>` — find trace paths for tests matching a name pattern
 - `summary <tracePath>` — one-call trace summary
 - `slow-steps <tracePath>` — slowest steps from a single trace
@@ -86,14 +87,22 @@ Hub-assisted discovery details:
 - Override with `--base-url <url>` or `PLAYWRIGHT_REPORTS_BASE_URL`
 - If no report is specified by path, `reportRef`, metadata, date, or recency hint, the default local analysis target should be `./playwright-report`
 
-`failures` is a compact triage command. It returns per-failure trace pointers plus primary related-action context and repeated cross-report request or issue patterns, so the next step is usually to run `summary <tracePath>` for one selected failure.
+`failures` is the primary triage command. It requires an `<outputDir>` and writes one
+self-contained folder per failed attempt (each failed retry included, no dedup) under
+`<outputDir>/run-<timestamp>/`. Each folder holds `failure.json` (title, error, step
+tree, slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
+reference at failure), already-extracted screenshots, `network-errors.json`,
+`console-errors.json`, and `error.md` (Playwright's human-readable error with its generic
+`# Instructions` preamble stripped, diagnostic sections kept verbatim) when available. A
+manifest is printed to stdout and mirrored to `<runDir>/index.json`. Read a failure folder
+directly; run `summary <tracePath>` only when you need extra detail for one selected failure.
 
 `find-traces` is a discovery command for locating any test's trace — including passed tests. It matches a regex against full test titles and returns trace paths for all retries, with optional `--outcome` filtering.
 
 Typical CLI workflow:
 
 ```bash
-npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis
 npx playwright-traces-reader summary /absolute/path/to/playwright-report/data/<sha1>
 ```
 
@@ -109,7 +118,7 @@ Hub-assisted workflow:
 ```bash
 npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
-npx playwright-traces-reader failures <reportRootPath>
+npx playwright-traces-reader failures <reportRootPath> <outputDir>
 npx playwright-traces-reader summary <tracePath>
 npx playwright-traces-reader vault-read <analysisFile>
 ```
@@ -234,8 +243,8 @@ The API section below describes the exported library functions.
 
 Important distinction:
 
-- the CLI `failures` command now returns compact triage records
-- the library `getFailedTestSummaries()` function still returns full `TraceSummary[]`
+- the CLI `failures` command digests failing attempts into self-contained folders on disk
+- the library `getFailedTestSummaries()` function returns full `TraceSummary[]` in memory
 
 ### `getFailedTestSummaries(reportDataDir, options?)`
 
