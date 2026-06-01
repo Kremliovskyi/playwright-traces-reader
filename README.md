@@ -89,13 +89,15 @@ Hub-assisted discovery details:
 
 `failures` is the primary triage command. It requires an `<outputDir>` and writes one
 self-contained folder per failed attempt (each failed retry included, no dedup) under
-`<outputDir>/run-<timestamp>/`. Each folder holds `failure.json` (title, error, step
-tree, slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
-reference at failure), already-extracted screenshots, `network-errors.json`,
-`console-errors.json`, and `error.md` (Playwright's human-readable error with its generic
-`# Instructions` preamble stripped, diagnostic sections kept verbatim) when available. A
-manifest is printed to stdout and mirrored to `<runDir>/index.json`. Read a failure folder
-directly; run `summary <tracePath>` only when you need extra detail for one selected failure.
+`<outputDir>/run-<timestamp>/`. Each folder holds `failure.json` (title, step tree,
+slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
+reference at failure — ANSI escape codes stripped from step/issue messages),
+already-extracted screenshots, `network-errors.json`, `console-errors.json`, and
+`error.md` (Playwright's human-readable error — the single source of the full error
+text — with its generic `# Instructions` preamble stripped, diagnostic sections kept
+verbatim) when available. A manifest is printed to stdout and mirrored to
+`<runDir>/index.json`. Read a failure folder directly; run `summary <tracePath>` only
+when you need extra detail for one selected failure.
 
 `find-traces` is a discovery command for locating any test's trace — including passed tests. It matches a regex against full test titles and returns trace paths for all retries, with optional `--outcome` filtering.
 

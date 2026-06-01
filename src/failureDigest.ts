@@ -8,6 +8,8 @@ import {
   getTopLevelFailures,
   type FailureAnchor,
   type GetFailedTestSummariesOptions,
+  type TestStep,
+  type TraceIssue,
   type TraceSummary,
 } from './extractors';
 import {
@@ -36,8 +38,40 @@ interface FailureReportInfo {
   markdownPath: string | null;
 }
 
-function firstLine(value?: string | null): string | null {
-  return value ? value.split(/\r?\n/, 1)[0] ?? null : null;
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+
+/** Remove ANSI SGR color/style escape codes from a string. */
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_PATTERN, '');
+}
+
+/**
+ * Deep copy of the step tree with ANSI escape codes stripped from any step
+ * error message/stack. The original summary objects are left untouched because
+ * they are still used for in-memory skip detection and the manifest.
+ */
+function cleanSteps(steps: TestStep[]): TestStep[] {
+  return steps.map(step => ({
+    ...step,
+    error: step.error
+      ? {
+          ...step.error,
+          message: stripAnsi(step.error.message),
+          ...(step.error.stack !== undefined ? { stack: stripAnsi(step.error.stack) } : {}),
+        }
+      : step.error,
+    children: cleanSteps(step.children),
+  }));
+}
+
+/** Copy of the issues list with ANSI escape codes stripped from message/stack. */
+function cleanIssues(issues: TraceIssue[]): TraceIssue[] {
+  return issues.map(issue => ({
+    ...issue,
+    message: stripAnsi(issue.message),
+    stack: issue.stack ? stripAnsi(issue.stack) : issue.stack,
+  }));
 }
 
 // Playwright's error-context markdown starts with a generic "# Instructions"
@@ -353,7 +387,6 @@ async function writeSingleFailure(args: {
     );
   }
 
-  const errorMessage = firstLine(summary.error?.message);
   const networkErrorCount = networkErrorEntries.length;
   const consoleErrorCount = consoleEntries.length;
 
@@ -365,12 +398,10 @@ async function writeSingleFailure(args: {
     outcome: summary.outcome,
     durationMs: summary.durationMs,
     retryIndex,
-    errorMessage,
-    error: summary.error,
     traceSha1,
     tracePath: ctx.traceDir,
-    topLevelSteps: summary.topLevelSteps,
-    issues: summary.issues,
+    topLevelSteps: cleanSteps(summary.topLevelSteps),
+    issues: cleanIssues(summary.issues),
     actionDiagnostics: summary.actionDiagnostics,
     failureDomSnapshot: summary.failureDomSnapshot,
     networkCallCount: summary.networkCalls.length,
@@ -397,7 +428,6 @@ async function writeSingleFailure(args: {
     retryIndex,
     status: summary.status,
     outcome: summary.outcome,
-    errorMessage,
     traceSha1,
     screenshotCount,
     networkErrorCount,

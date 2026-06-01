@@ -9,7 +9,6 @@ import type {
   SavedAttachment,
   Screenshot,
   TestStep,
-  TraceError,
   TraceIssue,
   TimelineEntry,
   TraceSummary,
@@ -78,8 +77,6 @@ export interface FailureFolderJson {
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
   durationMs: number | null;
   retryIndex: number;
-  errorMessage: string | null;
-  error: TraceError | null;
   traceSha1: string;
   tracePath: string;
   topLevelSteps: TestStep[];
@@ -106,7 +103,6 @@ export interface FailureManifestEntry {
   retryIndex: number;
   status: 'passed' | 'failed';
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
-  errorMessage: string | null;
   traceSha1: string;
   screenshotCount: number;
   networkErrorCount: number;

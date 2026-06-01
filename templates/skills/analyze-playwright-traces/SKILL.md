@@ -171,6 +171,8 @@ What it does:
 - each folder contains `failure.json` (the full digest), `screenshots/` frames
   around each failure point, `network-errors.json`, `console-errors.json`,
   and `error.md` when available
+- the full human-readable error text lives in `error.md`; `failure.json` holds
+  the structured step tree and issues with ANSI escape codes stripped
 - mirrors the manifest to `<runDir>/index.json`
 - prints the compact manifest to stdout (one entry per failed attempt with
   `folder`, `retryIndex`, counts)

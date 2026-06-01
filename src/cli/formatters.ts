@@ -73,12 +73,10 @@ export function formatFailuresText(manifest: FailuresCommandJson): string {
 
   const failureText = manifest.failures.map((failure, index) => {
     const title = failure.testTitle ?? failure.title;
-    const errorLine = failure.errorMessage ?? 'No error message available';
 
     return [
       `${index + 1}. [${failure.outcome ?? failure.status}] ${title} (retry ${failure.retryIndex})`,
       `   Folder: ${failure.folder}`,
-      `   Error: ${errorLine}`,
       `   Trace SHA1: ${failure.traceSha1}`,
       `   Screenshots: ${failure.screenshotCount} | Network errors: ${failure.networkErrorCount} | Console errors: ${failure.consoleErrorCount}`,
     ].join('\n');

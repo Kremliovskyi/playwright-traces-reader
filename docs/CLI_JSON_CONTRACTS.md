@@ -72,7 +72,6 @@ prints a compact manifest to stdout. The manifest is also mirrored to
       "retryIndex": 1,
       "status": "failed",
       "outcome": "unexpected",
-      "errorMessage": "Synthetic failure for trace-fail-latest",
       "traceSha1": "trace-fail-latest",
       "screenshotCount": 3,
       "networkErrorCount": 2,
@@ -97,7 +96,6 @@ Each manifest entry includes:
 - `retryIndex` — 0-based retry attempt index
 - `status` — trace status
 - `outcome` — report outcome when metadata is available
-- `errorMessage` — compact top error message
 - `traceSha1` — trace directory identifier
 - `screenshotCount` — number of screenshot frames written into the folder
 - `networkErrorCount` — number of network entries with status >= 400
@@ -123,10 +121,10 @@ Each `<runDir>/<folder>/` contains:
 `failure.json` fields:
 
 - `testTitle`, `title`, `status`, `outcome`, `durationMs`, `retryIndex`
-- `errorMessage` — compact top error message
-- `error` — full structured error
 - `traceSha1`, `tracePath`
-- `topLevelSteps`, `issues`, `actionDiagnostics`, `failureDomSnapshot`
+- `topLevelSteps`, `issues`, `actionDiagnostics`, `failureDomSnapshot` — ANSI
+  escape codes are stripped from any step error and issue message/stack. The full
+  human-readable error lives in `error.md`.
 - `networkCallCount`, `networkErrorCount`, `consoleErrorCount`
 - `screenshots` — per-anchor relative paths (`before` / `action` / `after`, or null)
 - `files` — relative paths to companion files (`networkErrors`, `consoleErrors`,
