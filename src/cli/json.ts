@@ -3,12 +3,13 @@ import type {
   ActionDiagnosticSummary,
   AttachmentEntry,
   ConsoleEntry,
+  FailureDomSnapshotRef,
   FoundTrace,
   NetworkEntry,
-  ReportFailurePatterns,
   SavedAttachment,
   Screenshot,
   TestStep,
+  TraceError,
   TraceIssue,
   TimelineEntry,
   TraceSummary,
@@ -17,21 +18,99 @@ import type { HubReportDescriptor } from './helpers';
 
 export const CLI_JSON_SCHEMA_VERSION = 1 as const;
 
-export interface FailureListItem {
+/** Screencast frames captured around a single failure anchor. */
+export interface FailureScreenshotSetJson {
+  anchorCallId: string | null;
+  anchorTitle: string | null;
+  anchorTimestamp: number;
+  /** Relative path (from the failure folder) to the frame before the failure, or null. */
+  before: string | null;
+  /** Relative path to the frame closest to the failure, or null. */
+  action: string | null;
+  /** Relative path to the frame after the failure, or null. */
+  after: string | null;
+}
+
+/** When a failing network request happened relative to a failure anchor. */
+export interface NetworkErrorTimingJson {
+  anchorCallId: string | null;
+  anchorTimestamp: number;
+  relation: 'before' | 'during' | 'after' | 'unknown';
+}
+
+/** A single failing (status ≥ 400) network request enriched for triage. */
+export interface NetworkErrorEntryJson {
+  method: string;
+  url: string;
+  status: number;
+  statusText: string;
+  durationMs: number;
+  startedDateTime: string;
+  requestBody: string | null;
+  responseBody: string | null;
+  relatedAction: { callId: string; title: string } | null;
+  timingRelativeToFailures: NetworkErrorTimingJson[];
+}
+
+/** Contents of the per-failure `network-errors.json` file. */
+export interface NetworkErrorsFileJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  traceSha1: string;
+  failureAnchors: Array<{ callId: string | null; title: string | null; timestamp: number }>;
+  count: number;
+  errors: NetworkErrorEntryJson[];
+}
+
+/** Contents of the per-failure `console-errors.json` file. */
+export interface ConsoleErrorsFileJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  traceSha1: string;
+  count: number;
+  entries: ConsoleEntry[];
+}
+
+/** Per-failure `failure.json` written into each failure folder. */
+export interface FailureFolderJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   testTitle: string | null;
   title: string;
   status: 'passed' | 'failed';
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
   durationMs: number | null;
+  retryIndex: number;
   errorMessage: string | null;
-  tracePath: string;
+  error: TraceError | null;
   traceSha1: string;
+  tracePath: string;
+  topLevelSteps: TestStep[];
+  issues: TraceIssue[];
+  actionDiagnostics: ActionDiagnosticSummary[];
+  failureDomSnapshot: FailureDomSnapshotRef | null;
   networkCallCount: number;
   networkErrorCount: number;
-  issueCount: number;
-  correlatedActionCount: number;
-  primaryRelatedAction: ActionDiagnosticSummary | null;
-  hasFailureDomSnapshot: boolean;
+  consoleErrorCount: number;
+  screenshots: FailureScreenshotSetJson[];
+  /** Relative paths (from the failure folder) to companion artifact files, or null when absent. */
+  files: {
+    networkErrors: string | null;
+    consoleErrors: string | null;
+    errorMarkdown: string | null;
+  };
+}
+
+/** One entry in the failures run manifest emitted to stdout. */
+export interface FailureManifestEntry {
+  folder: string;
+  testTitle: string | null;
+  title: string;
+  retryIndex: number;
+  status: 'passed' | 'failed';
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+  errorMessage: string | null;
+  traceSha1: string;
+  screenshotCount: number;
+  networkErrorCount: number;
+  consoleErrorCount: number;
 }
 
 export interface InitSkillsCommandJson {
@@ -59,9 +138,10 @@ export interface PrepareReportCommandJson {
 export interface FailuresCommandJson {
   schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   command: 'failures';
+  outputDir: string;
+  runDir: string;
   count: number;
-  failures: FailureListItem[];
-  patterns: ReportFailurePatterns;
+  failures: FailureManifestEntry[];
 }
 
 export interface SummaryCommandJson {
@@ -218,13 +298,18 @@ export function createPrepareReportCommandJson(report: HubReportDescriptor, mode
   };
 }
 
-export function createFailuresCommandJson(failures: FailureListItem[], patterns: ReportFailurePatterns): FailuresCommandJson {
+export function createFailuresCommandJson(
+  outputDir: string,
+  runDir: string,
+  failures: FailureManifestEntry[],
+): FailuresCommandJson {
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
     command: 'failures',
+    outputDir,
+    runDir,
     count: failures.length,
     failures,
-    patterns,
   };
 }
 

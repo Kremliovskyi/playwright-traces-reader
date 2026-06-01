@@ -25,7 +25,7 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | `search-reports` | hub | Search reports through a local playwright-reports hub |
 | `prepare-report` | hub | Resolve one hub report reference into a local path |
 | `vault-read` | hub | Read a vault analysis markdown file from the hub |
-| `failures` | report | Return unique failing tests across a report |
+| `failures` | report | Digest failing tests into per-failure folders under an output directory |
 | `find-traces` | report | Find trace paths for tests matching a name pattern |
 | `summary` | trace | Return one complete summary for a single trace |
 | `slow-steps` | trace | Return the slowest steps for a single trace |
@@ -49,7 +49,7 @@ Directory containing `index.html` and `data/`.
 Example:
 
 ```bash
-npx playwright-traces-reader failures ./playwright-report
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis
 ```
 
 ### Report data directory
@@ -59,7 +59,7 @@ Directory containing SHA1 trace entries.
 Example:
 
 ```bash
-npx playwright-traces-reader failures ./playwright-report/data
+npx playwright-traces-reader failures ./playwright-report/data ./trace-analysis
 ```
 
 ### Trace path
@@ -166,35 +166,36 @@ Behavior:
 
 ## `failures`
 
-Analyzes a report and returns unique failing tests only.
+Digests failing tests into one self-contained folder per failed attempt.
 
 Usage:
 
 ```bash
-npx playwright-traces-reader failures <reportPath> [--exclude-skipped] [--format json|text]
+npx playwright-traces-reader failures <reportPath> <outputDir> [--exclude-skipped] [--format json|text]
 ```
 
 Accepted inputs:
 
 - report root
 - report `data/` directory
+- `outputDir` is required
 
 Behavior:
 
 - passing tests are excluded
-- retries are deduplicated
-- output is intentionally compact for report-level triage
-- each item includes `tracePath` and `traceSha1`
-- each item includes issue counts and the primary related browser action when available
-- output also includes repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures
-- use `summary <tracePath>` to inspect one selected failure in full
+- one folder is written per failed attempt, including each failed retry (no dedup)
+- folders are created under `<outputDir>/run-<timestamp>/`
+- each folder contains `failure.json` plus `screenshots/`, `network-errors.json`,
+  `console-errors.json`, and `error.md` when available
+- the manifest is printed to stdout and mirrored to `<runDir>/index.json`
+- read a failure folder directly; use `summary <tracePath>` only for extra detail
 
 Examples:
 
 ```bash
-npx playwright-traces-reader failures ./playwright-report
-npx playwright-traces-reader summary /absolute/path/to/trace-dir
-npx playwright-traces-reader failures ./playwright-report --format text
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis --exclude-skipped
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis --format text
 ```
 
 ## `find-traces`
@@ -390,6 +391,12 @@ npx playwright-traces-reader errors ./playwright-report/data/<sha1> --format tex
 ## `dom`
 
 Writes DOM snapshots for one trace to a file.
+
+Child `<iframe>`/`<frame>` content is inlined recursively into the parent DOM via
+`srcdoc`, so each snapshot is a complete, self-contained page. This matters for
+iframe-heavy apps (e.g. embedded vendor flows): the meaningful UI lives inside
+child frames, and an agent reading the snapshot needs that content to update
+locators. Targets inside child frames are also resolved into `targetElement`.
 
 Usage:
 

@@ -19,9 +19,9 @@ Use this skill when the user asks to analyze Playwright reports or traces, inclu
 
 ## Output Handling
 
-- Do not truncate `npx playwright-traces-reader failures ...` output on the first attempt with `Select-Object`, `head`, or similar shell filtering.
-- `failures` is the compact triage command and should normally be consumed in full.
-- After reading `failures`, choose one item and use `summary <tracePath>` for full details.
+- Do not truncate `npx playwright-traces-reader failures ...` manifest output on the first attempt with `Select-Object`, `head`, or similar shell filtering.
+- `failures` prints a compact manifest and writes per-failure folders to disk; consume the manifest in full, then read individual failure folders as needed.
+- After reading the manifest, open a failure folder's `failure.json` (and its companion files) directly; use `summary <tracePath>` only for extra detail.
 - For potentially larger commands such as `network`, `dom`, or `timeline`, narrowing output is acceptable when needed.
 
 ## Prerequisites
@@ -61,7 +61,7 @@ Important scope rule:
 If the user gave no report identifier at all, do not start with hub discovery. Use the local default `playwright-report/` directory first.
 
 ```bash
-npx playwright-traces-reader failures playwright-report/
+npx playwright-traces-reader failures playwright-report/ ./trace-analysis
 ```
 
 Use `search-reports` when the user describes a report by metadata or recency instead of giving a filesystem path.
@@ -108,7 +108,7 @@ Example handoff flow:
 ```bash
 npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
-npx playwright-traces-reader failures <reportRootPath>
+npx playwright-traces-reader failures <reportRootPath> ./trace-analysis
 npx playwright-traces-reader summary <tracePath>
 ```
 
@@ -150,26 +150,35 @@ The agent cannot access vault files directly with `read_file` because they are s
 
 ### Report-level analysis
 
-Use `failures` when the user wants all unique failing tests in a report.
+Use `failures` when the user wants to triage all failing tests in a report. It
+**requires an output directory** and writes one self-contained folder per failed
+attempt (including each failed retry) into a timestamped run subfolder, then
+prints a compact manifest.
 
 ```bash
-npx playwright-traces-reader failures /path/to/playwright-report
+npx playwright-traces-reader failures /path/to/playwright-report /path/to/output
 ```
 
 Use `--exclude-skipped` to omit skipped tests:
 
 ```bash
-npx playwright-traces-reader failures /path/to/playwright-report/data --exclude-skipped
+npx playwright-traces-reader failures /path/to/playwright-report/data /path/to/output --exclude-skipped
 ```
 
-What it returns:
+What it does:
 
-- unique failing tests only
-- retries already deduplicated
-- compact triage records with `tracePath` and `traceSha1`
-- per-failure issue counts and primary related browser action when available
-- repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures
-- enough information to follow up with `summary <tracePath>` for one selected failure
+- creates `<output>/run-<timestamp>/` and writes one folder per failed attempt
+- each folder contains `failure.json` (the full digest), `screenshots/` frames
+  around each failure point, `network-errors.json`, `console-errors.json`,
+  and `error.md` when available
+- mirrors the manifest to `<runDir>/index.json`
+- prints the compact manifest to stdout (one entry per failed attempt with
+  `folder`, `retryIndex`, counts)
+
+Read the per-failure folder directly from disk instead of re-querying the trace —
+that is the whole point: everything needed to reason about one failure is bundled
+in its folder. Use `summary <tracePath>` only when you need additional detail not
+in the folder.
 
 ### Finding traces for any test
 
@@ -222,8 +231,7 @@ Important behavior:
 - `summary` works for both passed and failed traces
 - `summary` includes issues and aggregated related-action diagnostics
 - failed traces include `failureDomSnapshot` — a lightweight metadata reference (callId, phases, frameUrl), NOT the full HTML
-- to retrieve full DOM HTML, use `dom --near <callId> --output <path>a lightweight metadata reference (callId, phases, frameUrl), NOT the full HTML
-- to retrieve full DOM HTML, use `dom --near <callId> --output <path>`
+- to retrieve full DOM HTML, use `dom --near <callId> --output ./tmp/dom.json`
 - passed traces return `status: "passed"` and `failureDomSnapshot: null`
 
 ### Slow steps
@@ -304,13 +312,25 @@ npx playwright-traces-reader errors /path/to/playwright-report/data/<sha1>
  Output is always written to a file (`--output` is required).
 
 ```bash
-npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --output /tmp/dom.json --near last --limit 3
+npx playwright-traces-reader dom /path/to/playwright-report/data/<sha1> --output ./tmp/dom.json --near last --limit 3
 ```
+
+Write to a path **inside the workspace** (e.g. `./tmp/dom.json`) so you can open
+it afterward with `read_file`. The DOM HTML is the point of this command — saving
+to `/tmp` outside the workspace makes it harder to read back.
+
+There is no separate `.html` file. The HTML is stored as a string in the
+`snapshots[].<phase>.html` field (where `<phase>` is `before`, `action`, or
+`after`) inside the JSON file. Open the JSON with `read_file` and read that field.
+
+Each snapshot's `html` is self-contained: child `<iframe>`/`<frame>` content is
+inlined recursively as `srcdoc` (no `/snapshot/<frameId>` placeholders), so you
+can read embedded vendor/app flows and update locators directly. Targets inside
+child frames are resolved into `targetElement`.
 
 Useful filters:
 
 - `--near last`
-- `--near <callId>` (use the callId from `failureDomSnapshot` in the summary)
 - `--near <callId>` (use the callId from `failureDomSnapshot` in the summary)
 - `--phase before|action|after`
 - `--limit <count>`

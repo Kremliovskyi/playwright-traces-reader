@@ -10,7 +10,6 @@ import {
   getFailedTestSummaries,
   getNetworkTraffic,
   getNetworkRequest,
-  getReportFailurePatterns,
   getReportMetadata,
   getSummary,
   getTestSteps,
@@ -249,13 +248,5 @@ describe('playwright-traces-reader sanity', () => {
     expect(unexpectedOnly.every(summary => summary.outcome === 'unexpected')).toBe(true);
     expect(unexpectedOnly.some(summary => summary.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
     expect(unexpectedOnly.some(summary => summary.title === fixture.traces.failedPeer.rootTitle)).toBe(true);
-  });
-
-  test('getReportFailurePatterns groups repeated failing requests and correlated issues across unique failures', async () => {
-    const patterns = await getReportFailurePatterns(fixture.dataDir, { excludeSkipped: true });
-
-    expect(patterns.repeatedFailingRequests.some(pattern => pattern.signature === 'GET /:id/browser-call' && pattern.count === 2)).toBe(true);
-    expect(patterns.repeatedFailingRequests.some(pattern => pattern.signature === 'POST /:id/api-call' && pattern.count === 2)).toBe(true);
-    expect(patterns.repeatedIssues.some(pattern => pattern.source === 'page' && pattern.count === 2)).toBe(true);
   });
 });

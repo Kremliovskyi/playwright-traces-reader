@@ -13,12 +13,11 @@ import {
   getNetworkTraffic,
   getSummary,
   getTestSteps,
-  summarizeReportFailurePatterns,
   getTimeline,
   prepareTraceDir,
   findTraces,
 } from './index';
-import { getFailedTraceSelections } from './extractors';
+import { writeFailureDigests } from './failureDigest';
 import {
   copySkillTemplate,
   DEFAULT_REPORTS_HUB_BASE_URL,
@@ -63,7 +62,6 @@ import {
   createDomCommandJson,
   createDomConfirmationJson,
   createErrorsCommandJson,
-  createFailuresCommandJson,
   createFindTracesCommandJson,
   createNetworkCommandJson,
   createScreenshotsCommandJson,
@@ -74,7 +72,6 @@ import {
   createVaultReadCommandJson,
 } from './cli/json';
 import type { DomSnapshotOptions } from './index';
-import type { FailureListItem } from './cli/json';
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -190,40 +187,17 @@ function buildProgram(io: CliIo): Command {
     });
 
   program
-    .command('failures <reportPath>')
-    .description('Analyze unique failing tests in a Playwright report root or data directory')
+    .command('failures <reportPath> <outputDir>')
+    .description('Digest failing tests into per-failure folders (json, screenshots, network/console errors) under outputDir')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--exclude-skipped', 'Exclude skipped tests from the result set', false)
-    .action(async (reportPath: string, options: { format: OutputFormat; excludeSkipped: boolean }) => {
+    .action(async (reportPath: string, outputDir: string, options: { format: OutputFormat; excludeSkipped: boolean }) => {
       const reportDataDir = await resolveReportDataDir(reportPath);
-      const selections = await getFailedTraceSelections(reportDataDir, {
+      const manifest = await writeFailureDigests(reportDataDir, outputDir, {
         excludeSkipped: options.excludeSkipped,
       });
-      const patterns = summarizeReportFailurePatterns(selections);
 
-      const failures: FailureListItem[] = selections.map(selection => {
-        const errorMessage = firstLine(selection.summary.error?.message);
-        const networkErrorCount = selection.summary.networkCalls.filter(entry => entry.status >= 400).length;
-
-        return {
-          testTitle: selection.summary.testTitle,
-          title: selection.summary.title,
-          status: selection.summary.status,
-          outcome: selection.summary.outcome,
-          durationMs: selection.summary.durationMs,
-          errorMessage,
-          tracePath: selection.tracePath,
-          traceSha1: selection.traceSha1,
-          networkCallCount: selection.summary.networkCalls.length,
-          networkErrorCount,
-          issueCount: selection.summary.issues.length,
-          correlatedActionCount: selection.summary.actionDiagnostics.length,
-          primaryRelatedAction: selection.summary.actionDiagnostics[0] ?? null,
-          hasFailureDomSnapshot: selection.summary.failureDomSnapshot !== null,
-        };
-      });
-
-      emitOutput(io, options.format, createFailuresCommandJson(failures, patterns), formatFailuresText(failures, patterns));
+      emitOutput(io, options.format, manifest, formatFailuresText(manifest));
     });
 
   program
@@ -465,11 +439,6 @@ function buildProgram(io: CliIo): Command {
     });
 
   return program;
-}
-
-function firstLine(value?: string | null): string | null {
-  if (!value) return null;
-  return value.split(/\r?\n/, 1)[0] ?? null;
 }
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<number> {

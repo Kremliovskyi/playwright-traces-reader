@@ -91,37 +91,6 @@ export interface TraceIssue {
   relatedAction: RelatedActionRef | null;
 }
 
-export interface RepeatedFailingRequestPattern {
-  signature: string;
-  method: string;
-  url: string;
-  count: number;
-  traceSha1s: string[];
-  statuses: number[];
-  relatedActions: Array<{
-    callId: string;
-    title: string;
-  }>;
-}
-
-export interface RepeatedIssuePattern {
-  signature: string;
-  source: TraceIssue['source'];
-  name: string | null;
-  message: string;
-  count: number;
-  traceSha1s: string[];
-  relatedActions: Array<{
-    callId: string;
-    title: string;
-  }>;
-}
-
-export interface ReportFailurePatterns {
-  repeatedFailingRequests: RepeatedFailingRequestPattern[];
-  repeatedIssues: RepeatedIssuePattern[];
-}
-
 export interface NetworkFilterOptions {
   source?: 'all' | 'browser' | 'api';
   grep?: string;
@@ -698,6 +667,108 @@ export async function extractScreenshots(
   return screenshots;
 }
 
+// ---------- extractFailureScreenshots ----------
+
+/** A point of interest in a failing test (a failing step / assertion). */
+export interface FailureAnchor {
+  /** The failing action/step callId, when known. */
+  callId: string | null;
+  /** Human-readable step/issue title, when known. */
+  title: string | null;
+  /** Wall-clock timestamp (ms) of the failure point. */
+  timestamp: number;
+}
+
+/** Screencast frames captured around a single failure anchor. */
+export interface FailureScreenshotSet {
+  anchorCallId: string | null;
+  anchorTitle: string | null;
+  anchorTimestamp: number;
+  /** Relative file name of the frame just before the failure, or null. */
+  before: string | null;
+  /** Relative file name of the frame closest to the failure, or null. */
+  action: string | null;
+  /** Relative file name of the frame just after the failure, or null. */
+  after: string | null;
+}
+
+/**
+ * For each failure anchor, locates the nearest screencast frame `before`
+ * (timestamp ≤ anchor), `action` (closest in time), and `after`
+ * (timestamp ≥ anchor), writes the referenced image blobs into `outDir`, and
+ * returns the saved file names per anchor.
+ *
+ * Frames are de-duplicated by SHA1 — the same underlying image is written once
+ * and referenced by multiple roles/anchors. Returns an empty array when the
+ * trace has no screencast frames (e.g. API-only tests or capture disabled).
+ */
+export async function extractFailureScreenshots(
+  traceContext: TraceContext,
+  anchors: FailureAnchor[],
+  outDir: string,
+): Promise<FailureScreenshotSet[]> {
+  const frames = await getScreenshotMetadata(traceContext);
+  if (frames.length === 0 || anchors.length === 0)
+    return [];
+
+  frames.sort((a, b) => a.timestamp - b.timestamp);
+
+  await fs.promises.mkdir(outDir, { recursive: true });
+
+  // SHA1 → relative file name (written once, referenced many times).
+  const writtenBySha1 = new Map<string, string>();
+
+  const ensureWritten = async (sha1: string): Promise<string | null> => {
+    const cached = writtenBySha1.get(sha1);
+    if (cached !== undefined)
+      return cached;
+
+    const buf = await getResourceBuffer(traceContext, sha1);
+    if (!buf)
+      return null;
+
+    const ext = sha1.endsWith('.jpeg') ? 'jpeg' : 'png';
+    const shortSha1 = sha1.replace(/\.(jpeg|png)$/, '').slice(0, 12);
+    const fileName = `frame-${shortSha1}.${ext}`;
+    await fs.promises.writeFile(path.join(outDir, fileName), buf);
+    writtenBySha1.set(sha1, fileName);
+    return fileName;
+  };
+
+  const sets: FailureScreenshotSet[] = [];
+
+  for (const anchor of anchors) {
+    let before: ScreenshotMetadata | null = null;
+    let after: ScreenshotMetadata | null = null;
+    let action: ScreenshotMetadata | null = null;
+    let actionDistance = Number.POSITIVE_INFINITY;
+
+    for (const frame of frames) {
+      if (frame.timestamp <= anchor.timestamp)
+        before = frame; // frames are sorted, so the last match wins
+      if (after === null && frame.timestamp >= anchor.timestamp)
+        after = frame;
+
+      const distance = Math.abs(frame.timestamp - anchor.timestamp);
+      if (distance < actionDistance) {
+        actionDistance = distance;
+        action = frame;
+      }
+    }
+
+    sets.push({
+      anchorCallId: anchor.callId,
+      anchorTitle: anchor.title,
+      anchorTimestamp: anchor.timestamp,
+      before: before ? await ensureWritten(before.sha1) : null,
+      action: action ? await ensureWritten(action.sha1) : null,
+      after: after ? await ensureWritten(after.sha1) : null,
+    });
+  }
+
+  return sets;
+}
+
 // ---------- getDomSnapshots ----------
 
 /**
@@ -836,25 +907,65 @@ const VOID_TAGS = new Set([
   'keygen','link','menuitem','meta','param','source','track','wbr',
 ]);
 
+/** Maximum iframe nesting depth to inline before bailing out (cycle/runaway guard). */
+const MAX_IFRAME_DEPTH = 10;
+
 /**
- * Resolves a snapshot node tree into an HTML string.
+ * A single captured snapshot for one frame, indexed by its position in that
+ * frame's history (needed for back-reference resolution).
+ */
+interface FrameSnapshotEntry {
+  html: SnapshotNode;
+  historyIndex: number;
+}
+
+/**
+ * Shared state for a single render pass, allowing `resolveSnapshotNode` to
+ * recurse into child iframe snapshots and inline them.
  *
- * `snapshotIndex` is the 0-based index of the current snapshot in `frameHistory`.
- * `frameHistory` is the ordered list of all raw snapshot HTMLs seen so far for
- * this frame (current snapshot is already appended before this call).
- * `dfsCache` is a memoization cache shared across the entire trace-file pass to
- * avoid rebuilding the same DFS node lists repeatedly.
+ * Playwright captures every frame (the main page and each child iframe) as its
+ * own snapshot series keyed by `frameId`, all sharing the same `snapshotName`
+ * for a given action (e.g. `before@call@98`). At capture time an iframe's `src`
+ * is rewritten to `/snapshot/<childFrameId>` and the trace viewer resolves it
+ * lazily via a service worker. Since we produce a self-contained HTML file
+ * instead, we resolve each child frame here and inline it as `srcdoc`.
+ */
+interface RenderContext {
+  /** frameId → ordered list of that frame's raw snapshot HTMLs (for back-refs). */
+  frameHistory: Map<string, SnapshotNode[]>;
+  /** frameId → snapshotName → the matching snapshot entry for that frame. */
+  frameSnapshotsByName: Map<string, Map<string, FrameSnapshotEntry>>;
+  /** Memoization cache for buildSnapshotNodeList. */
+  dfsCache: Map<SnapshotNode, SnapshotNode[]>;
+  /** The action snapshot name being rendered (used to pick child snapshots). */
+  snapshotName: string;
+  /** frameIds currently on the render stack (cycle guard). */
+  stack: Set<string>;
+}
+
+/**
+ * Resolves a snapshot node tree into an HTML string for a given frame.
+ *
+ * `snapshotIndex` is the 0-based index of the current snapshot in the frame's
+ * history. `frameId` identifies the frame so back-references resolve against the
+ * correct history and child iframes can be inlined recursively.
  *
  * Back-references `[[offset, nodeIdx]]` are resolved as:
  *   refIndex = snapshotIndex - offset
  *   node     = snapshotNodes(frameHistory[refIndex])[nodeIdx]
+ *
+ * `<iframe>` / `<frame>` elements whose `src` is `/snapshot/<childFrameId>` are
+ * replaced with the recursively-rendered child frame HTML inlined via `srcdoc`,
+ * producing a complete, self-contained page.
  */
 function resolveSnapshotNode(
   node: SnapshotNode,
   snapshotIndex: number,
-  frameHistory: SnapshotNode[],
-  dfsCache: Map<SnapshotNode, SnapshotNode[]>
+  frameId: string,
+  ctx: RenderContext
 ): string {
+  const frameHistory = ctx.frameHistory.get(frameId) ?? [];
+
   if (typeof node === 'string') {
     return escapeHtml(node);
   }
@@ -871,9 +982,9 @@ function resolveSnapshotNode(
     const refIndex = snapshotIndex - offset;
     if (refIndex >= 0 && refIndex < frameHistory.length) {
       const refHtml = frameHistory[refIndex]!;
-      const nodes = buildSnapshotNodeList(refHtml, dfsCache);
+      const nodes = buildSnapshotNodeList(refHtml, ctx.dfsCache);
       if (nodeIdx >= 0 && nodeIdx < nodes.length) {
-        return resolveSnapshotNode(nodes[nodeIdx]!, refIndex, frameHistory, dfsCache);
+        return resolveSnapshotNode(nodes[nodeIdx]!, refIndex, frameId, ctx);
       }
     }
     return `<!-- ref: [${offset}, ${nodeIdx}] unresolved -->`;
@@ -886,19 +997,72 @@ function resolveSnapshotNode(
   const tag = tagName.toLowerCase();
   if (tag === 'script') return '';  // not useful for AI analysis
 
-  const attrStr = attrs && typeof attrs === 'object' && !Array.isArray(attrs)
-    ? Object.entries(attrs)
-        .filter(([k]) => !k.startsWith('__playwright'))
-        .map(([k, v]) => ` ${k}="${escapeAttr(String(v))}"`)
-        .join('')
-    : '';
+  const safeAttrs = attrs && typeof attrs === 'object' && !Array.isArray(attrs)
+    ? (attrs as Record<string, string>)
+    : {};
+
+  // Inline child frames: <iframe>/<frame> with src="/snapshot/<frameId>".
+  if (tag === 'iframe' || tag === 'frame') {
+    const childFrameId = parseSnapshotFrameId(safeAttrs['src']);
+    const baseAttrs = Object.entries(safeAttrs)
+      .filter(([k]) => !k.startsWith('__playwright') && k.toLowerCase() !== 'src' && k.toLowerCase() !== 'srcdoc')
+      .map(([k, v]) => ` ${k}="${escapeAttr(String(v))}"`)
+      .join('');
+
+    if (childFrameId) {
+      const childHtml = renderChildFrame(childFrameId, ctx);
+      if (childHtml !== null) {
+        return `<${tag}${baseAttrs} srcdoc="${escapeAttr(childHtml)}"></${tag}>`;
+      }
+      return `<${tag}${baseAttrs}><!-- child frame ${escapeHtml(childFrameId)} not captured for ${escapeHtml(ctx.snapshotName)} --></${tag}>`;
+    }
+    return `<${tag}${baseAttrs}></${tag}>`;
+  }
+
+  const attrStr = Object.entries(safeAttrs)
+    .filter(([k]) => !k.startsWith('__playwright'))
+    .map(([k, v]) => ` ${k}="${escapeAttr(String(v))}"`)
+    .join('');
 
   if (VOID_TAGS.has(tag)) {
     return `<${tag}${attrStr}>`;
   }
 
-  const inner = children.map(c => resolveSnapshotNode(c, snapshotIndex, frameHistory, dfsCache)).join('');
+  const inner = children.map(c => resolveSnapshotNode(c, snapshotIndex, frameId, ctx)).join('');
   return `<${tag}${attrStr}>${inner}</${tag}>`;
+}
+
+/**
+ * Extracts the child frameId from an iframe `src` of the form
+ * `/snapshot/<frameId>` (Playwright's capture-time rewrite). Returns null for
+ * any other value (empty, blank, or a real URL).
+ */
+function parseSnapshotFrameId(src: string | undefined): string | null {
+  if (!src) return null;
+  const prefix = '/snapshot/';
+  if (!src.startsWith(prefix)) return null;
+  const id = src.substring(prefix.length).trim();
+  return id.length > 0 ? id : null;
+}
+
+/**
+ * Renders a child frame's snapshot (matching the current action's snapshotName)
+ * to an HTML string, recursing into its own child frames. Returns null when the
+ * frame has no snapshot for this action or when the depth/cycle guard trips.
+ */
+function renderChildFrame(childFrameId: string, ctx: RenderContext): string | null {
+  if (ctx.stack.has(childFrameId)) return null;       // cycle guard
+  if (ctx.stack.size >= MAX_IFRAME_DEPTH) return null; // runaway depth guard
+
+  const entry = ctx.frameSnapshotsByName.get(childFrameId)?.get(ctx.snapshotName);
+  if (!entry) return null;
+
+  ctx.stack.add(childFrameId);
+  try {
+    return resolveSnapshotNode(entry.html, entry.historyIndex, childFrameId, ctx);
+  } finally {
+    ctx.stack.delete(childFrameId);
+  }
 }
 
 function escapeHtml(s: string): string {
@@ -925,15 +1089,31 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
   const files = await fs.promises.readdir(traceContext.traceDir);
   const traceFiles = files.filter(f => f.endsWith('.trace') && f !== 'test.trace').sort();
 
-  // Per-frame snapshot history: frameId → ordered list of raw html nodes
+  // Per-frame snapshot history: frameId → ordered list of raw html nodes (for back-refs).
   const frameHistory = new Map<string, SnapshotNode[]>();
+  // Per-frame snapshot lookup: frameId → snapshotName → entry (for inlining child frames).
+  const frameSnapshotsByName = new Map<string, Map<string, FrameSnapshotEntry>>();
 
   // Memoization cache for buildSnapshotNodeList — keyed by html object reference
   const dfsCache = new Map<SnapshotNode, SnapshotNode[]>();
 
-  // Collect resolved snapshots keyed by callId → phase
-  const rawByCallId = new Map<string, Map<string, DomSnapshot>>();
+  // Raw metadata for main-frame snapshots, rendered in a second pass once every
+  // frame (including child iframes) has been collected.
+  interface MainFrameRecord {
+    callId: string;
+    phase: 'before' | 'action' | 'after';
+    snapshotName: string;
+    frameId: string;
+    frameUrl: string;
+    pageId: string;
+    timestamp: number;
+    viewport: { width: number; height: number };
+    html: SnapshotNode;
+    snapshotIndex: number;
+  }
+  const mainFrameRecords: MainFrameRecord[] = [];
 
+  // ---- Pass 1: collect every frame snapshot (main + child iframes) ----
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
 
@@ -941,7 +1121,19 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
       if (event.type !== 'frame-snapshot') continue;
       const snap = event.snapshot;
 
-      const { snapshotName, callId, frameId, frameUrl, pageId, viewport, timestamp, html } = snap;
+      const { snapshotName, callId, frameId, frameUrl, pageId, viewport, timestamp, html, isMainFrame } = snap;
+
+      // Append to per-frame history BEFORE anything else (so refs can point back to it)
+      if (!frameHistory.has(frameId)) frameHistory.set(frameId, []);
+      const history = frameHistory.get(frameId)!;
+      history.push(html);
+      const snapshotIndex = history.length - 1;
+
+      // Index by snapshotName so parent frames can inline this child by name.
+      if (!frameSnapshotsByName.has(frameId)) frameSnapshotsByName.set(frameId, new Map());
+      frameSnapshotsByName.get(frameId)!.set(snapshotName, { html, historyIndex: snapshotIndex });
+
+      if (!isMainFrame) continue; // child frames are only inlined, never top-level entries
 
       // Determine phase from snapshotName prefix
       let phase: 'before' | 'action' | 'after';
@@ -955,34 +1147,44 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
         continue; // unknown phase, skip
       }
 
-      // Append to per-frame history BEFORE resolving (so refs can point back to it)
-      if (!frameHistory.has(frameId)) frameHistory.set(frameId, []);
-      const history = frameHistory.get(frameId)!;
-      history.push(html);
-      const snapshotIndex = history.length - 1;
-
-      // Resolve the full html to a string using the correct ref algorithm
-      const resolvedHtml = resolveSnapshotNode(html, snapshotIndex, history, dfsCache);
-
-      // Extract the __playwright_target__ attribute to identify the targeted element
-      const targetElement = findPlaywrightTarget(html);
-
-      const domSnapshot: DomSnapshot = {
-        callId,
-        phase,
-        snapshotName,
-        frameId,
-        frameUrl,
-        pageId,
-        timestamp,
-        viewport,
-        html: resolvedHtml,
-        targetElement,
-      };
-
-      if (!rawByCallId.has(callId)) rawByCallId.set(callId, new Map());
-      rawByCallId.get(callId)!.set(phase, domSnapshot);
+      mainFrameRecords.push({
+        callId, phase, snapshotName, frameId, frameUrl, pageId, timestamp, viewport, html, snapshotIndex,
+      });
     }
+  }
+
+  // ---- Pass 2: render each main-frame snapshot, inlining child iframes ----
+  const rawByCallId = new Map<string, Map<string, DomSnapshot>>();
+  for (const rec of mainFrameRecords) {
+    const ctx: RenderContext = {
+      frameHistory,
+      frameSnapshotsByName,
+      dfsCache,
+      snapshotName: rec.snapshotName,
+      stack: new Set<string>([rec.frameId]),
+    };
+
+    const resolvedHtml = resolveSnapshotNode(rec.html, rec.snapshotIndex, rec.frameId, ctx);
+    const targetElement = findPlaywrightTarget(rec.html, {
+      ...ctx,
+      stack: new Set<string>([rec.frameId]),
+    });
+
+    const domSnapshot: DomSnapshot = {
+      callId: rec.callId,
+      phase: rec.phase,
+      snapshotName: rec.snapshotName,
+      frameId: rec.frameId,
+      frameUrl: rec.frameUrl,
+      pageId: rec.pageId,
+      timestamp: rec.timestamp,
+      viewport: rec.viewport,
+      html: resolvedHtml,
+      targetElement,
+    };
+
+    if (!rawByCallId.has(rec.callId)) rawByCallId.set(rec.callId, new Map());
+    rawByCallId.get(rec.callId)!.set(rec.phase, domSnapshot);
   }
 
   // Assemble into ActionDomSnapshots
@@ -1035,18 +1237,44 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
   return result;
 }
 
-/** Recursively searches the snapshot tree for a node with __playwright_target__ */
-function findPlaywrightTarget(node: SnapshotNode): string | null {
+/**
+ * Recursively searches the snapshot tree for a node with __playwright_target__.
+ *
+ * When `ctx` is provided, the search also descends into child `<iframe>`/`<frame>`
+ * elements (matched by `src="/snapshot/<frameId>"`) so a target living inside a
+ * child frame is still found. Cycles and runaway depth are guarded via `ctx.stack`.
+ */
+function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext): string | null {
   if (!Array.isArray(node) || node.length < 2) return null;
   const attrs = node[1];
   if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
     const target = (attrs as Record<string, string>)['__playwright_target__'];
     if (target) return target;
+
+    // Descend into child frames so targets inside iframes are still found.
+    if (ctx && typeof node[0] === 'string') {
+      const tag = node[0].toLowerCase();
+      if (tag === 'iframe' || tag === 'frame') {
+        const childFrameId = parseSnapshotFrameId((attrs as Record<string, string>)['src']);
+        if (childFrameId && !ctx.stack.has(childFrameId) && ctx.stack.size < MAX_IFRAME_DEPTH) {
+          const entry = ctx.frameSnapshotsByName.get(childFrameId)?.get(ctx.snapshotName);
+          if (entry) {
+            ctx.stack.add(childFrameId);
+            try {
+              const found = findPlaywrightTarget(entry.html, ctx);
+              if (found) return found;
+            } finally {
+              ctx.stack.delete(childFrameId);
+            }
+          }
+        }
+      }
+    }
   }
   for (let i = 2; i < node.length; i++) {
     const child = node[i];
     if (Array.isArray(child)) {
-      const found = findPlaywrightTarget(child as SnapshotNode[]);
+      const found = findPlaywrightTarget(child as SnapshotNode[], ctx);
       if (found) return found;
     }
   }
@@ -1132,91 +1360,6 @@ function buildActionDiagnostics(networkCalls: NetworkEntry[], issues: TraceIssue
     const rightScore = right.failingNetworkCallCount * 10 + right.issueCount * 5 + right.networkCallCount;
     return rightScore - leftScore;
   });
-}
-
-function buildReportFailurePatterns(selections: FailedTraceSelection[]): ReportFailurePatterns {
-  const realFailures = selections.filter(selection => selection.summary.outcome !== 'skipped');
-  const repeatedFailingRequests = new Map<string, {
-    method: string;
-    url: string;
-    traces: Set<string>;
-    statuses: Set<number>;
-    relatedActions: Map<string, { callId: string; title: string }>;
-  }>();
-  const repeatedIssues = new Map<string, {
-    source: TraceIssue['source'];
-    name: string | null;
-    message: string;
-    traces: Set<string>;
-    relatedActions: Map<string, { callId: string; title: string }>;
-  }>();
-
-  for (const selection of realFailures) {
-    for (const entry of selection.summary.networkCalls) {
-      if (entry.status < 400)
-        continue;
-
-      const signature = buildRequestPatternSignature(entry);
-      const bucket = repeatedFailingRequests.get(signature) ?? {
-        method: entry.method,
-        url: stripQuery(entry.url),
-        traces: new Set<string>(),
-        statuses: new Set<number>(),
-        relatedActions: new Map<string, { callId: string; title: string }>(),
-      };
-
-      bucket.traces.add(selection.traceSha1);
-      bucket.statuses.add(entry.status);
-      if (entry.relatedAction)
-        bucket.relatedActions.set(entry.relatedAction.callId, { callId: entry.relatedAction.callId, title: entry.relatedAction.title });
-      repeatedFailingRequests.set(signature, bucket);
-    }
-
-    for (const issue of selection.summary.issues) {
-      if (!issue.relatedAction)
-        continue;
-
-      const signature = buildIssuePatternSignature(issue);
-      const bucket = repeatedIssues.get(signature) ?? {
-        source: issue.source,
-        name: issue.name,
-        message: firstLine(issue.message) ?? issue.message,
-        traces: new Set<string>(),
-        relatedActions: new Map<string, { callId: string; title: string }>(),
-      };
-
-      bucket.traces.add(selection.traceSha1);
-      bucket.relatedActions.set(issue.relatedAction.callId, { callId: issue.relatedAction.callId, title: issue.relatedAction.title });
-      repeatedIssues.set(signature, bucket);
-    }
-  }
-
-  return {
-    repeatedFailingRequests: [...repeatedFailingRequests.entries()]
-      .map(([signature, bucket]) => ({
-        signature,
-        method: bucket.method,
-        url: bucket.url,
-        count: bucket.traces.size,
-        traceSha1s: [...bucket.traces].sort(),
-        statuses: [...bucket.statuses].sort((left, right) => left - right),
-        relatedActions: [...bucket.relatedActions.values()],
-      }))
-      .filter(pattern => pattern.count > 1)
-      .sort((left, right) => right.count - left.count),
-    repeatedIssues: [...repeatedIssues.entries()]
-      .map(([signature, bucket]) => ({
-        signature,
-        source: bucket.source,
-        name: bucket.name,
-        message: bucket.message,
-        count: bucket.traces.size,
-        traceSha1s: [...bucket.traces].sort(),
-        relatedActions: [...bucket.relatedActions.values()],
-      }))
-      .filter(pattern => pattern.count > 1)
-      .sort((left, right) => right.count - left.count),
-  };
 }
 
 async function attachmentSize(
@@ -1362,66 +1505,6 @@ function filterNetworkEntries(entries: NetworkEntry[], options?: NetworkFilterOp
     filtered = filtered.slice(0, options.limit);
 
   return filtered;
-}
-
-function buildRequestPatternSignature(entry: NetworkEntry): string {
-  try {
-    const parsed = new URL(entry.url);
-    return `${entry.method.toUpperCase()} ${normalizePathname(parsed.pathname)}`;
-  } catch {
-    return `${entry.method.toUpperCase()} ${entry.url}`;
-  }
-}
-
-function buildIssuePatternSignature(issue: TraceIssue): string {
-  return [
-    issue.source,
-    issue.name ?? 'Error',
-    normalizeIssueMessage(firstLine(issue.message) ?? issue.message),
-  ].join(' | ');
-}
-
-function normalizePathname(pathname: string): string {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0)
-    return '/';
-
-  return `/${segments.map(normalizePathSegment).join('/')}`;
-}
-
-function normalizePathSegment(segment: string): string {
-  if (/^\d+$/.test(segment))
-    return ':id';
-  if (/^[0-9a-f]{8,}$/i.test(segment))
-    return ':id';
-  if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment))
-    return ':id';
-  if (/^trace-[\w-]+$/i.test(segment))
-    return ':id';
-  return segment;
-}
-
-function normalizeIssueMessage(message: string): string {
-  return message
-    .replace(/trace-[\w-]+/gi, ':trace')
-    .replace(/call@[\w-]+/gi, 'call@:id')
-    .replace(/\b[0-9a-f]{8,}\b/gi, ':id')
-    .replace(/\b\d+\b/g, ':n');
-}
-
-function stripQuery(urlText: string): string {
-  try {
-    const parsed = new URL(urlText);
-    parsed.search = '';
-    parsed.hash = '';
-    return parsed.toString();
-  } catch {
-    return urlText;
-  }
-}
-
-function firstLine(value?: string | null): string | null {
-  return value ? value.split(/\r?\n/, 1)[0] ?? null : null;
 }
 
 // ---------- getTimeline ----------
@@ -1718,18 +1801,6 @@ export interface FailedTraceSelection {
   tracePath: string;
   traceSha1: string;
   summary: TraceSummary;
-}
-
-export async function getReportFailurePatterns(
-  reportDataDir: string,
-  options?: GetFailedTestSummariesOptions,
-): Promise<ReportFailurePatterns> {
-  const selections = await getFailedTraceSelections(reportDataDir, options);
-  return buildReportFailurePatterns(selections);
-}
-
-export function summarizeReportFailurePatterns(selections: FailedTraceSelection[]): ReportFailurePatterns {
-  return buildReportFailurePatterns(selections);
 }
 
 export async function getFailedTraceSelections(

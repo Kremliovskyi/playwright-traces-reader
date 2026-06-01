@@ -132,7 +132,7 @@ Core extractors:
 - `getAttachments(ctx)` lists trace attachments with per-trace attachment IDs.
 - `extractAttachment(ctx, attachmentId, outputPath?)` resolves and writes one attachment by its per-trace ID.
 - `extractScreenshots(ctx, outDir)` writes screencast frames to disk and returns metadata.
-- `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`.
+- `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`. It resolves Playwright's compact snapshot format (text, back-references, elements) and recursively inlines child `<iframe>`/`<frame>` snapshots into the parent as `srcdoc`, producing self-contained HTML. Frames are matched by `frameId` (from `src="/snapshot/<frameId>"`) and the action's `snapshotName`; cycles and depth are guarded.
 - `getTimeline(ctx)` merges step, screenshot, DOM, and network events into one chronological stream.
 - `getTestTitle(ctx)` reads `context-options` and returns the canonical full test title.
 
@@ -149,8 +149,7 @@ Main APIs:
 - `getSummary(ctx, options)` builds one `TraceSummary` for a single trace.
 - `getFailedTraceSelections(reportDataDir, options?)` selects the winning failed traces and pairs them with trace identity metadata.
 - `getFailedTestSummaries(reportDataDir, options?)` performs report-level failure analysis and retry deduplication.
-- `getReportFailurePatterns(reportDataDir, options?)` groups repeated failing requests and repeated correlated issues across unique failed traces.
-- `summarizeReportFailurePatterns(selections)` computes the same cross-trace pattern summary from already selected failures.
+- `writeFailureDigests(reportDataDir, outputDir, options?)` writes one self-contained folder per failed attempt (including each failed retry) and returns the run manifest.
 
 Important current behavior:
 
@@ -164,7 +163,7 @@ Important current behavior:
 - `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
 - `getFailedTestSummaries()` keeps the last retry by comparing the latest root-step end time.
 - `getFailedTraceSelections()` reuses the same retry-selection logic but returns both the selected trace identity (`tracePath`, `traceSha1`) and the rich `TraceSummary`.
-- `getReportFailurePatterns()` normalizes request URLs and issue messages so repeated failure signatures can be grouped across distinct traces.
+- `writeFailureDigests()` walks every trace with root-step failures (no retry dedup), and for each writes a folder with `failure.json`, screenshots around failure anchors, network errors, console errors, and Playwright's error markdown when present. The `failure.json` carries a lightweight `failureDomSnapshot` pointer (callId/phases/timestamp/frameUrl/targetElement); full DOM HTML is fetched on demand via `dom --near <callId>`.
 
 This is the main library interface for consumers that need analysis rather than raw events.
 
@@ -179,7 +178,7 @@ Command surface:
 - `search-reports [query]`
 - `prepare-report <reportRef>`
 - `init-skills [targetDir]`
-- `failures <reportPath>`
+- `failures <reportPath> <outputDir>`
 - `find-traces <reportPath> <grep>`
 - `summary <tracePath>`
 - `slow-steps <tracePath>`
@@ -209,7 +208,7 @@ Current CLI contract choices:
 
 - JSON is the default output mode for all commands.
 - `search-reports` and `prepare-report` are discovery commands that stop at local path resolution.
-- `failures` is intentionally compact and returns CLI-specific triage records plus report-level repeated failure patterns.
+- `failures` writes one self-contained folder per failed attempt into a timestamped run directory and returns a compact manifest on stdout.
 - `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics. The `failureDomSnapshot` field is a lightweight metadata reference (callId, phases, timestamp, frameUrl) rather than full HTML, keeping the JSON payload small.
 - `dom` always writes full DOM snapshots to a file (`--output` is required). Stdout receives a lightweight confirmation with `savedPath`, `count`, and `callIds` — never the full HTML.
 - `network` is the listing surface for discovering per-trace `requestId` values later consumed by `request`.
@@ -258,9 +257,7 @@ All command JSON payloads currently include:
 - `command`
 - a command-specific payload such as `summary`, `failures`, `entries`, `steps`, `snapshots`, or `screenshots`
 
-The `failures` command is intentionally compact at the CLI layer. It no longer returns full `TraceSummary` objects. Instead, it returns triage records with enough data to select one failure and call `summary <tracePath>` for full detail.
-
-The `failures` payload also includes grouped repeated failing-request and repeated correlated-issue patterns across unique non-skipped failures.
+The `failures` command writes per-failure folders to disk and returns a compact manifest at the CLI layer. Each folder bundles a `failure.json` digest plus screenshots, network errors, console errors, the failure DOM, and Playwright's error markdown when available, so an agent can read everything about one failure from disk in a single pass.
 
 The `summary` payload is richer than the initial implementation and now includes:
 
@@ -304,7 +301,7 @@ Instead, the package now uses generated synthetic artifacts created at test runt
 - network resources and screenshot blobs
 - console, page-error, stdout/stderr, and attachment signals
 - passing, failing, skipped, and retry scenarios
-- repeated cross-trace failure patterns for aggregation tests
+- a failed test with multiple retries, screencast frames, failing 4xx/5xx network calls, console errors, and an error-context markdown attachment for failure-digest tests
 
 This gives the test suite three benefits:
 
@@ -334,15 +331,13 @@ trace dir or trace zip
 ```text
 report root or report data dir
   -> resolveReportDataDir
-  -> getFailedTraceSelections
+  -> writeFailureDigests
   -> listTraces
-  -> getTopLevelFailures per trace
-  -> retry grouping and skip filtering
-  -> getSummary for winning traces only
-  -> summarizeReportFailurePatterns
-  -> compact failure records with tracePath, traceSha1, and primary action context
-  -> repeated request and issue pattern groups
-  -> optional CLI formatter or JSON envelope
+  -> getTopLevelFailures per trace (no retry dedup)
+  -> getSummary for each failed attempt
+  -> per-failure folder: failure.json + screenshots + network-errors + console-errors + failure-dom + error.md
+  -> runDir/index.json manifest
+  -> compact manifest on stdout (CLI formatter or JSON envelope)
 ```
 
 ### Trace discovery by test name

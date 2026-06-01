@@ -5,7 +5,6 @@ import type {
   ConsoleEntry,
   FoundTrace,
   NetworkEntry,
-  ReportFailurePatterns,
   SavedAttachment,
   Screenshot,
   TestStep,
@@ -13,7 +12,7 @@ import type {
   TimelineEntry,
   TraceSummary,
 } from '../index';
-import type { FailureListItem } from './json';
+import type { FailuresCommandJson } from './json';
 import type { HubReportDescriptor } from './helpers';
 
 export type OutputFormat = 'text' | 'json';
@@ -64,35 +63,28 @@ export function formatVaultReadSavedText(filename: string, savedPath: string): s
   return `Vault file "${filename}" saved to ${savedPath}`;
 }
 
-export function formatFailuresText(failures: FailureListItem[], patterns?: ReportFailurePatterns): string {
-  if (failures.length === 0) return 'No failing tests found.';
+export function formatFailuresText(manifest: FailuresCommandJson): string {
+  if (manifest.count === 0) return 'No failing tests found.';
 
-  const failureText = failures.map((failure, index) => {
+  const header = [
+    `Wrote ${manifest.count} failure folder(s) to ${manifest.runDir}`,
+    `Manifest: ${manifest.runDir}/index.json`,
+  ].join('\n');
+
+  const failureText = manifest.failures.map((failure, index) => {
     const title = failure.testTitle ?? failure.title;
     const errorLine = failure.errorMessage ?? 'No error message available';
 
-    const lines = [
-      `${index + 1}. [${failure.outcome ?? failure.status}] ${title}`,
-      `   Duration: ${formatDuration(failure.durationMs)}`,
+    return [
+      `${index + 1}. [${failure.outcome ?? failure.status}] ${title} (retry ${failure.retryIndex})`,
+      `   Folder: ${failure.folder}`,
       `   Error: ${errorLine}`,
       `   Trace SHA1: ${failure.traceSha1}`,
-      `   Trace path: ${failure.tracePath}`,
-      `   Network: ${failure.networkCallCount} calls (${failure.networkErrorCount} errors)`,
-      `   Issues: ${failure.issueCount} | Correlated actions: ${failure.correlatedActionCount}`,
-      `   Failure DOM snapshot: ${failure.hasFailureDomSnapshot ? 'yes' : 'no'}`,
-    ];
-
-    if (failure.primaryRelatedAction) {
-      lines.push(
-        `   Primary related action: ${failure.primaryRelatedAction.action.callId} ${failure.primaryRelatedAction.action.title}`,
-      );
-    }
-
-    return lines.join('\n');
+      `   Screenshots: ${failure.screenshotCount} | Network errors: ${failure.networkErrorCount} | Console errors: ${failure.consoleErrorCount}`,
+    ].join('\n');
   }).join('\n\n');
 
-  const patternText = patterns ? formatFailurePatternsText(patterns) : '';
-  return patternText ? `${failureText}\n\n${patternText}` : failureText;
+  return `${header}\n\n${failureText}`;
 }
 
 export function formatSummaryText(summary: TraceSummary): string {
@@ -285,44 +277,6 @@ export function formatAttachmentText(attachment: SavedAttachment): string {
     `Call ID: ${attachment.callId}`,
     `Saved path: ${attachment.savedPath}`,
   ].join('\n');
-}
-
-export function formatFailurePatternsText(patterns: ReportFailurePatterns): string {
-  const sections: string[] = [];
-
-  if (patterns.repeatedFailingRequests.length > 0) {
-    sections.push('Repeated failing requests:');
-    sections.push(indentBlock(patterns.repeatedFailingRequests.map((pattern, index) => {
-      const lines = [
-        `${index + 1}. ${pattern.signature} in ${pattern.count} failures`,
-        `   Example URL: ${pattern.url}`,
-        `   Statuses: ${pattern.statuses.join(', ')}`,
-      ];
-
-      if (pattern.relatedActions.length > 0)
-        lines.push(`   Related actions: ${pattern.relatedActions.map(action => `${action.callId} ${action.title}`).join(' | ')}`);
-
-      return lines.join('\n');
-    }).join('\n\n'), 2));
-  }
-
-  if (patterns.repeatedIssues.length > 0) {
-    sections.push('Repeated correlated issues:');
-    sections.push(indentBlock(patterns.repeatedIssues.map((pattern, index) => {
-      const lines = [
-        `${index + 1}. [${pattern.source}] ${pattern.name ?? 'Error'}: ${pattern.message}`,
-        `   Signature: ${pattern.signature}`,
-        `   Seen in: ${pattern.count} failures`,
-      ];
-
-      if (pattern.relatedActions.length > 0)
-        lines.push(`   Related actions: ${pattern.relatedActions.map(action => `${action.callId} ${action.title}`).join(' | ')}`);
-
-      return lines.join('\n');
-    }).join('\n\n'), 2));
-  }
-
-  return sections.join('\n');
 }
 
 export function formatDomSnapshotsText(snapshots: ActionDomSnapshots[]): string {

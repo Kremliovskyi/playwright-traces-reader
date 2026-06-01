@@ -19,7 +19,7 @@ See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON o
 - Extract browser console, page errors, and stdio output (`getConsoleEntries`, `getTraceIssues`)
 - List and extract trace attachments (`getAttachments`, `extractAttachment`)
 - Save screenshots from screencasts for human visual inspection (`extractScreenshots`)
-- Extract full DOM snapshots (before / during / after each action) with back-reference resolution and filtering options (`getDomSnapshots`); the `dom` CLI command always writes to a file (`--output` required) and returns a lightweight confirmation on stdout
+- Extract full DOM snapshots (before / during / after each action) with back-reference resolution, recursive child-iframe inlining (child `<iframe>`/`<frame>` content is stitched into the parent as `srcdoc`, producing self-contained HTML), and filtering options (`getDomSnapshots`); the `dom` CLI command always writes to a file (`--output` required) and returns a lightweight confirmation on stdout
 - Merged chronological timeline of steps, screenshots, DOM snapshots, and network calls (`getTimeline`)
 - Reliable unique test title for deduplication across retries (`getTestTitle`)
 - Find traces for any test by name pattern, including passed tests, with outcome filtering (`findTraces`)

@@ -432,38 +432,63 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
   await fs.promises.writeFile(path.join(dataDir, 'notes.md'), 'ignore me\n');
   await fs.promises.writeFile(path.join(dataDir, 'preview.png'), 'not-a-trace\n');
 
+  // Human-readable failure markdown for the latest retry, exercised by `error.md`.
+  const errorContextSha1 = `${failedLatest.sha1}-error.md`;
+  await fs.promises.writeFile(
+    path.join(dataDir, errorContextSha1),
+    `# Test failed\n\nSynthetic failure for ${failedLatest.sha1}\n`,
+  );
+
+  // Group specs by testId so that retried attempts share a single test entry
+  // with one result per attempt (result index === retry index).
+  const specsByTestId = new Map<string, TraceSpec[]>();
+  for (const spec of specs) {
+    const group = specsByTestId.get(spec.testId) ?? [];
+    group.push(spec);
+    specsByTestId.set(spec.testId, group);
+  }
+
   const reportJson = {
     stats: { total: 5, expected: 1, unexpected: 3, flaky: 0, skipped: 1, ok: false },
     files: [
       {
         fileId: 'synthetic.spec.ts',
         fileName: 'tests/synthetic.spec.ts',
-        tests: specs.map(spec => {
-          const titleParts = spec.fullTitle.split(' › ');
-          const shortTitle = titleParts[titleParts.length - 1] ?? spec.fullTitle;
+        tests: [...specsByTestId.values()].map(group => {
+          const attempts = [...group].sort((left, right) => left.startTime - right.startTime);
+          const representative = attempts[attempts.length - 1]!;
+          const titleParts = representative.fullTitle.split(' › ');
+          const shortTitle = titleParts[titleParts.length - 1] ?? representative.fullTitle;
           return {
-          testId: spec.testId,
-          title: shortTitle,
-          path: spec.fullTitle.split(' › '),
-          projectName: 'synthetic',
-          location: { file: 'tests/synthetic.spec.ts', line: 1, column: 1 },
-          outcome: spec.outcome,
-          duration: spec.endTime - spec.startTime,
-          ok: spec.outcome === 'expected' || spec.outcome === 'flaky',
-          annotations: spec.skipped ? [{ type: 'skip', description: 'synthetic skip' }] : [],
-          tags: [],
-          results: [
-            {
+            testId: representative.testId,
+            title: shortTitle,
+            path: representative.fullTitle.split(' › '),
+            projectName: 'synthetic',
+            location: { file: 'tests/synthetic.spec.ts', line: 1, column: 1 },
+            outcome: representative.outcome,
+            duration: representative.endTime - representative.startTime,
+            ok: representative.outcome === 'expected' || representative.outcome === 'flaky',
+            annotations: representative.skipped ? [{ type: 'skip', description: 'synthetic skip' }] : [],
+            tags: [],
+            results: attempts.map(spec => ({
               attachments: [
                 {
                   name: 'trace',
                   path: `data/${spec.sha1}.zip`,
                   contentType: 'application/zip',
                 },
+                ...(spec.sha1 === failedLatest.sha1
+                  ? [
+                      {
+                        name: 'error-context',
+                        path: `data/${errorContextSha1}`,
+                        contentType: 'text/markdown',
+                      },
+                    ]
+                  : []),
               ],
-            },
-          ],
-        };
+            })),
+          };
         }),
       },
     ],

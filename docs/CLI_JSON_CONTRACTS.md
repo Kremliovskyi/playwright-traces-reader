@@ -52,75 +52,82 @@ Notes:
 
 ### `failures`
 
+`failures <reportPath> <outputDir>` writes one self-contained folder per failed
+test attempt (including each failed retry) into a timestamped run directory and
+prints a compact manifest to stdout. The manifest is also mirrored to
+`<runDir>/index.json`.
+
 ```json
 {
   "schemaVersion": 1,
   "command": "failures",
+  "outputDir": "/absolute/path/to/output",
+  "runDir": "/absolute/path/to/output/run-2026-06-01T09-46-23-000Z",
   "count": 2,
   "failures": [
     {
-      "tracePath": "/absolute/path/to/report/data/trace-fail-latest",
-      "traceSha1": "trace-fail-latest",
+      "folder": "tests-example-spec-ts-10-suite-test__retry1",
       "testTitle": "tests/example.spec.ts:10 › suite › test",
       "title": "main step",
+      "retryIndex": 1,
       "status": "failed",
       "outcome": "unexpected",
-      "durationMs": 800,
       "errorMessage": "Synthetic failure for trace-fail-latest",
-      "networkCallCount": 2,
+      "traceSha1": "trace-fail-latest",
+      "screenshotCount": 3,
       "networkErrorCount": 2,
-      "issueCount": 3,
-      "correlatedActionCount": 1,
-      "primaryRelatedAction": {
-        "action": {
-          "callId": "call@trace-fail-latest",
-          "title": "Click failing submit button"
-        },
-        "networkCallCount": 2,
-        "failingNetworkCallCount": 2,
-        "issueCount": 2
-      },
-      "hasFailureDomSnapshot": true
+      "consoleErrorCount": 1
     }
-  ],
-  "patterns": {
-    "repeatedFailingRequests": [
-      {
-        "signature": "POST /:id/api-call",
-        "count": 2
-      }
-    ],
-    "repeatedIssues": [
-      {
-        "signature": "page | PageError | page error :trace",
-        "count": 2
-      }
-    ]
-  }
+  ]
 }
 ```
 
-Payload field:
+Manifest fields:
 
-- `failures` — array of compact failure records for report-level triage
-- `patterns` — repeated failing-request and repeated correlated-issue groups across unique non-skipped failures
+- `outputDir` — resolved directory passed on the command line
+- `runDir` — timestamped subfolder holding the per-failure folders and `index.json`
+- `count` — number of failure folders written
+- `failures` — one manifest entry per failed attempt
 
-Each failure item includes:
+Each manifest entry includes:
 
+- `folder` — folder name under `runDir` (sanitized test title + `__retry<index>`)
 - `testTitle` — full canonical Playwright test title when available
 - `title` — main failing root-step title
+- `retryIndex` — 0-based retry attempt index
 - `status` — trace status
 - `outcome` — report outcome when metadata is available
-- `durationMs` — main root-step duration
 - `errorMessage` — compact top error message
-- `tracePath` — direct input path for `summary <tracePath>`
 - `traceSha1` — trace directory identifier
-- `networkCallCount` — number of network entries in the trace summary
+- `screenshotCount` — number of screenshot frames written into the folder
 - `networkErrorCount` — number of network entries with status >= 400
-- `issueCount` — number of issues in the trace summary
-- `correlatedActionCount` — number of related browser actions with aggregated diagnostics
-- `primaryRelatedAction` — top action diagnostic for the failure when available
-- `hasFailureDomSnapshot` — whether summary identified a nearest failure DOM snapshot
+- `consoleErrorCount` — number of console error entries
+
+#### Per-failure folder layout
+
+Each `<runDir>/<folder>/` contains:
+
+- `failure.json` — the full per-failure digest (see below). Companion file
+  references inside `files` are relative to the folder.
+- `screenshots/frame-*.{png,jpeg}` — screencast frames nearest each failure
+  anchor (`before`, `action`, `after`). Absent for API-only traces with no frames.
+- `network-errors.json` — failing network requests (status >= 400) with timing
+  correlated to each failure anchor (`before` / `during` / `after` / `unknown`).
+  Omitted when there are no failing requests.
+- `console-errors.json` — browser/stderr console errors. Omitted when none.
+- `error.md` — Playwright's human-readable error markdown, copied when present.
+
+`failure.json` fields:
+
+- `testTitle`, `title`, `status`, `outcome`, `durationMs`, `retryIndex`
+- `errorMessage` — compact top error message
+- `error` — full structured error
+- `traceSha1`, `tracePath`
+- `topLevelSteps`, `issues`, `actionDiagnostics`, `failureDomSnapshot`
+- `networkCallCount`, `networkErrorCount`, `consoleErrorCount`
+- `screenshots` — per-anchor relative paths (`before` / `action` / `after`, or null)
+- `files` — relative paths to companion files (`networkErrors`, `consoleErrors`,
+  `errorMarkdown`), each null when the file was not written
 
 ### `find-traces`
 
@@ -386,6 +393,9 @@ Important error fields:
 - `source`
 - `message`
 - `name`
+
+### `dom`
+
 The `dom` command always writes full snapshots to a file (`--output` is required). Stdout receives a lightweight confirmation.
 
 **File content** (written to `--output` path):
@@ -394,38 +404,6 @@ The `dom` command always writes full snapshots to a file (`--output` is required
 {
   "schemaVersion": 1,
   "command": "dom",
-  "count": 2,
-  "savedPath": "/tmp/dom-snapshots.json",
-  "snapshots": [
-    {
-      "callId": "call@123",
-      "before": null,
-      "action": { "html": "..." },
-      "after": null
-    }
-  ]
-}
-```
-
-**Stdout confirmation**:
-
-```json
-{
-  "schemaVersion": 1,
-  "command": "dom",
-  "count": 2,
-  "savedPath": "/tmp/dom-snapshots.json",
-  "callIds": ["call@123", "call@456"]
-}
-```
-
-Stdout confirmation fields:
-
-- `count` — number of action snapshot groups written
-- `savedPath` — absolute path to the output file
-- `callIds` — list of action callIds in the file
-
-File payload fields"dom",
   "count": 2,
   "savedPath": "/tmp/dom-snapshots.json",
   "snapshots": [
@@ -470,10 +448,14 @@ Each snapshot item includes:
 
 Each populated phase contains a `DomSnapshot` with fields such as:
 
-- `html`
+- `html` — fully resolved HTML for the main frame. Child `<iframe>`/`<frame>`
+  content is inlined recursively as `srcdoc`, so the snapshot is self-contained
+  (no `/snapshot/<frameId>` placeholders). `<script>`, inline `on*` handlers, and
+  `__playwright*` attributes are stripped.
 - `phase`
 - `frameUrl`
-- `targetElement`
+- `targetElement` — callId of the targeted element when an action marks one;
+  resolved even when the target lives inside a child frame
 - `viewport`
 - `timestamp`
 

@@ -12,13 +12,14 @@ export {
   getAttachments,
   extractAttachment,
   extractScreenshots,
+  extractFailureScreenshots,
   getDomSnapshots,
   getTimeline,
   getSummary,
   getFailedTestSummaries,
-  getReportFailurePatterns,
-  summarizeReportFailurePatterns,
 } from './extractors';
+
+export { writeFailureDigests } from './failureDigest';
 
 export type {
   ActionDiagnosticSummary,
@@ -27,9 +28,6 @@ export type {
   TestStep,
   TraceError,
   TraceIssue,
-  ReportFailurePatterns,
-  RepeatedFailingRequestPattern,
-  RepeatedIssuePattern,
   NetworkFilterOptions,
   NetworkEntry,
   RelatedActionRef,
@@ -37,6 +35,8 @@ export type {
   SavedAttachment,
   Screenshot,
   ScreenshotMetadata,
+  FailureAnchor,
+  FailureScreenshotSet,
   DomSnapshot,
   ActionDomSnapshots,
   DomSnapshotOptions,

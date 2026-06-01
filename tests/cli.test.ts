@@ -32,65 +32,93 @@ describe('playwright-traces-reader CLI', () => {
     await cleanupSyntheticReportFixture(fixture);
   });
 
-  test('failures command returns deduplicated report-level JSON summaries', async () => {
-    const result = await execCli(['failures', fixture.rootDir]);
+  test('failures command writes one folder per failed attempt with a manifest', async () => {
+    const outDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pw-failures-out-'));
+    try {
+      const result = await execCli(['failures', fixture.rootDir, outDir]);
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe('');
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
 
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
-    expect(payload.command).toBe('failures');
-    expect(payload.count).toBe(3);
-    const failures = payload.failures as Array<Record<string, unknown>>;
-    expect(failures.some(entry => entry.outcome === 'unexpected')).toBe(true);
-    expect(failures.some(entry => entry.outcome === 'skipped')).toBe(true);
-    expect(failures.some(entry => entry.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
-    expect(failures.some(entry => entry.title === fixture.traces.failedPeer.rootTitle)).toBe(true);
-    expect(failures[0]).toHaveProperty('tracePath');
-    expect(failures[0]).toHaveProperty('traceSha1');
-    expect(failures[0]).toHaveProperty('issueCount');
-    expect(failures[0]).toHaveProperty('primaryRelatedAction');
-    expect(failures[0]).not.toHaveProperty('topLevelSteps');
-    const patterns = payload.patterns as { repeatedFailingRequests: Array<{ signature: string; count: number }>; repeatedIssues: Array<{ source: string; count: number }> };
-    expect(patterns.repeatedFailingRequests.some(pattern => pattern.signature === 'POST /:id/api-call' && pattern.count === 2)).toBe(true);
-    expect(patterns.repeatedIssues.some(pattern => pattern.source === 'page' && pattern.count === 2)).toBe(true);
+      const payload = JSON.parse(result.stdout) as {
+        schemaVersion: number;
+        command: string;
+        outputDir: string;
+        runDir: string;
+        count: number;
+        failures: Array<Record<string, unknown>>;
+      };
+      expect(payload.schemaVersion).toBe(1);
+      expect(payload.command).toBe('failures');
+      expect(payload).not.toHaveProperty('patterns');
+      // earlier retry, latest retry, peer failure, skipped = 4 attempts.
+      expect(payload.count).toBe(4);
+      expect(payload.failures).toHaveLength(4);
+
+      // Manifest is mirrored to runDir/index.json.
+      const indexJson = JSON.parse(
+        await fs.promises.readFile(path.join(payload.runDir, 'index.json'), 'utf-8'),
+      ) as { count: number; failures: Array<{ folder: string }> };
+      expect(indexJson.count).toBe(4);
+
+      // Retry attempts produce retry0 and retry1 folders.
+      const retryIndexes = payload.failures
+        .filter(entry => (entry.traceSha1 === fixture.traces.failedLatest.sha1) || (entry.traceSha1 === fixture.traces.failedEarlierZip.sha1))
+        .map(entry => entry.retryIndex)
+        .sort();
+      expect(retryIndexes).toEqual([0, 1]);
+
+      // Each failure folder exists on disk with a failure.json.
+      for (const entry of payload.failures) {
+        const folderDir = path.join(payload.runDir, entry.folder as string);
+        expect(fs.existsSync(folderDir)).toBe(true);
+        const failureJson = JSON.parse(
+          await fs.promises.readFile(path.join(folderDir, 'failure.json'), 'utf-8'),
+        ) as Record<string, unknown>;
+        expect(failureJson).not.toHaveProperty('patterns');
+        expect(failureJson.traceSha1).toBe(entry.traceSha1);
+      }
+
+      // The latest retry carries screenshots, network errors and an error.md.
+      const latest = payload.failures.find(entry => entry.traceSha1 === fixture.traces.failedLatest.sha1)!;
+      const latestDir = path.join(payload.runDir, latest.folder as string);
+      const latestJson = JSON.parse(
+        await fs.promises.readFile(path.join(latestDir, 'failure.json'), 'utf-8'),
+      ) as { files: { errorMarkdown: string | null; networkErrors: string | null } };
+      expect(latest.networkErrorCount).toBe(2);
+      expect(fs.existsSync(path.join(latestDir, 'network-errors.json'))).toBe(true);
+      expect(latestJson.files.errorMarkdown).toBe('error.md');
+      expect(fs.existsSync(path.join(latestDir, 'error.md'))).toBe(true);
+      expect(Number(latest.screenshotCount)).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(latestDir, 'screenshots'))).toBe(true);
+    } finally {
+      await fs.promises.rm(outDir, { recursive: true, force: true });
+    }
   });
 
   test('failures command respects exclude-skipped', async () => {
-    const result = await execCli(['failures', fixture.rootDir, '--exclude-skipped']);
+    const outDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pw-failures-out-'));
+    try {
+      const result = await execCli(['failures', fixture.rootDir, outDir, '--exclude-skipped']);
 
-    expect(result.exitCode).toBe(0);
+      expect(result.exitCode).toBe(0);
 
-    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
-    expect(payload.command).toBe('failures');
-    expect(payload.count).toBe(2);
-    const failures = payload.failures as Array<{ outcome: string | null; title: string }>;
-    expect(failures.every(entry => entry.outcome !== 'skipped')).toBe(true);
-    expect(failures.some(entry => entry.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
-    expect(failures.some(entry => entry.title === fixture.traces.failedPeer.rootTitle)).toBe(true);
+      const payload = JSON.parse(result.stdout) as {
+        count: number;
+        failures: Array<{ outcome: string | null; traceSha1: string }>;
+      };
+      expect(payload.count).toBe(3);
+      expect(payload.failures.every(entry => entry.outcome !== 'skipped')).toBe(true);
+      expect(payload.failures.some(entry => entry.traceSha1 === fixture.traces.failedLatest.sha1)).toBe(true);
+      expect(payload.failures.some(entry => entry.traceSha1 === fixture.traces.failedPeer.sha1)).toBe(true);
+    } finally {
+      await fs.promises.rm(outDir, { recursive: true, force: true });
+    }
   });
 
-  test('failures output can be chained into summary using tracePath', async () => {
-    const failuresResult = await execCli(['failures', fixture.rootDir, '--exclude-skipped']);
-
-    expect(failuresResult.exitCode).toBe(0);
-
-    const failuresPayload = JSON.parse(failuresResult.stdout) as {
-      failures: Array<{ tracePath: string; traceSha1: string; title: string }>;
-    };
-    const selectedFailure = failuresPayload.failures[0]!;
-
-    expect(selectedFailure.traceSha1).toBe(fixture.traces.failedLatest.sha1);
-
-    const summaryResult = await execCli(['summary', selectedFailure.tracePath, '--report', fixture.rootDir]);
-
-    expect(summaryResult.exitCode).toBe(0);
-
-    const summaryPayload = JSON.parse(summaryResult.stdout) as { summary: { title: string; status: string } };
-    expect(summaryPayload.summary.title).toBe(selectedFailure.title);
-    expect(summaryPayload.summary.status).toBe('failed');
+  test('failures command requires an output directory', async () => {
+    const result = await execCli(['failures', fixture.rootDir]);
+    expect(result.exitCode).not.toBe(0);
   });
 
   test('summary command returns a failed trace summary as JSON', async () => {
