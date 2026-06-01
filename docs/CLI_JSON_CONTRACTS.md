@@ -116,6 +116,9 @@ Each `<runDir>/<folder>/` contains:
   Omitted when there are no failing requests.
 - `console-errors.json` — browser/stderr console errors. Omitted when none.
 - `error.md` — Playwright's human-readable error markdown, copied when present.
+  The leading `# Instructions` preamble (generic "explain and fix the test"
+  guidance) is stripped; the diagnostic sections (`# Test info`, `# Error
+  details`, etc.) are kept verbatim.
 
 `failure.json` fields:
 

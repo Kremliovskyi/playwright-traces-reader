@@ -186,7 +186,8 @@ Behavior:
 - one folder is written per failed attempt, including each failed retry (no dedup)
 - folders are created under `<outputDir>/run-<timestamp>/`
 - each folder contains `failure.json` plus `screenshots/`, `network-errors.json`,
-  `console-errors.json`, and `error.md` when available
+  `console-errors.json`, and `error.md` when available (its `# Instructions`
+  preamble is stripped, diagnostic sections kept verbatim)
 - the manifest is printed to stdout and mirrored to `<runDir>/index.json`
 - read a failure folder directly; use `summary <tracePath>` only for extra detail
 

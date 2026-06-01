@@ -40,6 +40,18 @@ function firstLine(value?: string | null): string | null {
   return value ? value.split(/\r?\n/, 1)[0] ?? null : null;
 }
 
+// Playwright's error-context markdown starts with a generic "# Instructions"
+// block telling an AI to explain and fix the test. That guidance is meant for a
+// one-off fix prompt and can derail higher-level analysis flows, so we drop it
+// and keep only the diagnostic sections. If the block is absent, the content is
+// returned unchanged.
+function stripInstructionsBlock(markdown: string): string {
+  if (!/^\s*#\s+Instructions\b/.test(markdown)) return markdown;
+  // Remove from the start up to the next top-level heading.
+  const stripped = markdown.replace(/^\s*#\s+Instructions\b[\s\S]*?(?=^#\s+)/m, '');
+  return stripped.replace(/^\s+/, '');
+}
+
 function sanitizeFolderName(value: string): string {
   const cleaned = value
     .toLowerCase()
@@ -333,7 +345,12 @@ async function writeSingleFailure(args: {
   let errorMarkdownFile: string | null = null;
   if (markdownPath) {
     errorMarkdownFile = 'error.md';
-    await fs.promises.copyFile(markdownPath, path.join(folderDir, errorMarkdownFile));
+    const raw = await fs.promises.readFile(markdownPath, 'utf-8');
+    await fs.promises.writeFile(
+      path.join(folderDir, errorMarkdownFile),
+      stripInstructionsBlock(raw),
+      'utf-8',
+    );
   }
 
   const errorMessage = firstLine(summary.error?.message);
