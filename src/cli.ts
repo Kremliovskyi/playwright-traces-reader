@@ -475,6 +475,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<num
 
 if (require.main === module) {
   runCli(process.argv.slice(2)).then(exitCode => {
-    process.exit(exitCode);
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
   });
 }
