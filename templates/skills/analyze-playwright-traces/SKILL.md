@@ -1,6 +1,6 @@
 ---
 name: analyze-playwright-traces
-description: Analyze Playwright reports and traces using the playwright-traces-reader CLI, including searching a local playwright-reports hub for runs like UAT EU before inspecting failures, single-test summaries, network traffic, DOM snapshots, screenshots, and timelines.
+description: Analyze Playwright reports and traces using the playwright-traces-reader CLI, including searching a local playwright-reports hub for runs like UAT EU before performing selective trace digestion, single-test summaries, network traffic, DOM snapshots, screenshots, and timelines.
 ---
 
 # Analyze Playwright Traces
@@ -19,9 +19,7 @@ Use this skill when the user asks to analyze Playwright reports or traces, inclu
 
 ## Output Handling
 
-- Do not truncate `npx playwright-traces-reader failures ...` manifest output on the first attempt with `Select-Object`, `head`, or similar shell filtering.
-- `failures` prints a compact manifest and writes per-failure folders to disk; consume the manifest in full, then read individual failure folders as needed.
-- After reading the manifest, open a failure folder's `failure.json` (and its companion files) directly; use `summary <tracePath>` only for extra detail.
+- When working with a digested trace folder (either provided directly or generated via the `digest` command), read the folder's `digest.json` and its companion files directly; use other commands only when you need additional detail.
 - For potentially larger commands such as `network`, `dom`, or `timeline`, narrowing output is acceptable when needed.
 
 ## Prerequisites
@@ -58,11 +56,7 @@ Important scope rule:
 
 ### Report discovery through playwright-reports
 
-If the user gave no report identifier at all, do not start with hub discovery. Use the local default `playwright-report/` directory first.
-
-```bash
-npx playwright-traces-reader failures playwright-report/ ./trace-analysis
-```
+If the user gave no report identifier at all, do not start with hub discovery. Locate the trace path directly within the local default `playwright-report/` directory first.
 
 Use `search-reports` when the user describes a report by metadata or recency instead of giving a filesystem path.
 
@@ -108,8 +102,8 @@ Example handoff flow:
 ```bash
 npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
-npx playwright-traces-reader failures <reportRootPath> ./trace-analysis
-npx playwright-traces-reader summary <tracePath>
+npx playwright-traces-reader find-traces <reportRootPath> "login"
+npx playwright-traces-reader digest <tracePath> ./tmp/digest-analysis --report <reportRootPath>
 ```
 
 ### Vault analysis files
@@ -148,43 +142,24 @@ npx playwright-traces-reader vault-read <analysisFile> --out ./tmp/analysis.md
 
 The agent cannot access vault files directly with `read_file` because they are stored outside the workspace. Always use `vault-read` through the terminal to retrieve vault content, or use `--out` to save it into the workspace first.
 
-### Report-level analysis
+### Single-test trace digestion (First Priority)
 
-Use `failures` when the user wants to triage all failing tests in a report. It
-**requires an output directory** and writes one self-contained folder per failed
-attempt (including each failed retry) into a timestamped run subfolder, then
-prints a compact manifest.
+If the user needs to analyze a specific test trace (either passed, failed, or flaky) and a digested folder has not already been provided directly (e.g., from the dashboard or by the user), use the `digest` command as your **first-priority** tool.
 
-```bash
-npx playwright-traces-reader failures /path/to/playwright-report /path/to/output
-```
-
-Use `--exclude-skipped` to omit skipped tests:
+Digesting a single trace produces a comprehensive, chronological step and event tree pre-correlated with DOM snapshots, console logs, and network NDJSON files, which is far more token-efficient than running individual parser commands (like `steps` or `network`).
 
 ```bash
-npx playwright-traces-reader failures /path/to/playwright-report/data /path/to/output --exclude-skipped
+npx playwright-traces-reader digest <tracePath> /path/to/output --report /path/to/playwright-report
 ```
 
 What it does:
+- Creates a self-contained output directory containing `digest.json` (the entry point step tree), `network.ndjson`, `console.ndjson`, and a `dom/` directory with self-contained Action-phase HTML snapshots.
+- Every step in `digest.json` links the sequence IDs of all network calls within its execution window.
+- Response bodies over 32 KB are spilled to `network-bodies.ndjson` with a `bodyRef` so you only load them if needed.
 
-- creates `<output>/run-<timestamp>/` and writes one folder per failed attempt
-- each folder contains `failure.json` (the full digest), `screenshots/` frames
-  around each failure point, `dom/<callId>.html` (the Action-phase DOM at each
-  failure anchor, referenced from `failure.json`), `network-errors.ndjson`
-  (one record per line, with per-anchor timing and 32 KB body spill to
-  `network-error-bodies.ndjson`), `console-errors.ndjson`, and `error.md` when
-  available
-- the NDJSON companions are greppable line-by-line and match the `digest` format
-- the full human-readable error text lives in `error.md`; `failure.json` holds
-  the structured step tree and issues with ANSI escape codes stripped
-- mirrors the manifest to `<runDir>/index.json`
-- prints the compact manifest to stdout (one entry per failed attempt with
-  `folder`, `retryIndex`, counts)
-
-Read the per-failure folder directly from disk instead of re-querying the trace —
-that is the whole point: everything needed to reason about one failure is bundled
-in its folder. Use `summary <tracePath>` only when you need additional detail not
-in the folder.
+Guidelines:
+- **Workspace Cleanup:** Choose any temporary output directory of your choice inside the workspace (e.g., `./tmp/digest-analysis`), perform your analysis by reading `digest.json` and its companion files directly, and then **delete the output directory** once you are done to keep the workspace clean. Make sure you do not delete any other files
+- **Pre-digested Folders:** If the user has already run the digest command or used the playwright-reports dashboard to digest the trace, they may provide the path to the pre-digested folder. In this case, bypass running the `digest` command and inspect `digest.json` in that folder directly.
 
 ### Finding traces for any test
 
@@ -407,10 +382,10 @@ npx playwright-traces-reader init-skills
 
 ## Example Prompts This Skill Covers
 
-- Analyze the default local Playwright report and list failures.
-- Find the UAT EU report and list failing tests.
+- Find the trace for a failed test in the local report and digest it.
+- Find the UAT EU report, locate the failing test "checkout", and digest its trace.
 - Find checkout reports from `2026-04-01` through `2026-04-03` and prepare the newest one.
-- Resolve this `reportRef` and summarize the failing trace.
+- Resolve this `reportRef` and summarize the trace.
 - Use the reports hub at `http://127.0.0.1:9333` to find the most recent smoke run.
-- Find the trace for my passed "login" test and show me its summary.
+- Find the trace for my passed "login" test and digest it.
 - Show me traces for all flaky tests matching "checkout".
