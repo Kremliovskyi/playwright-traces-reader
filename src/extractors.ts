@@ -42,6 +42,8 @@ export interface NetworkEntry {
   responseBody: string | null;
   mimeType: string;
   startedDateTime: string;
+  /** Monotonic timestamp (ms) of the request, on the same clock as TestStep.startTime/endTime. Null when not captured. */
+  monotonicTime: number | null;
   durationMs: number;
   relatedAction: RelatedActionRef | null;
 }
@@ -229,6 +231,7 @@ interface ResourceSnapshot {
     _apiRequest?: boolean;
     startedDateTime: string;
     time: number;
+    _monotonicTime?: number;
     request: {
       method: string;
       url: string;
@@ -409,6 +412,7 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
         responseBody,
         mimeType: content.mimeType,
         startedDateTime: snap.startedDateTime,
+        monotonicTime: snap._monotonicTime ?? null,
         durationMs: snap.time,
         relatedAction: correlateAction(actions, new Date(snap.startedDateTime).getTime(), snap.pageref ?? null),
       });
@@ -728,8 +732,11 @@ export async function extractFailureScreenshots(
       return null;
 
     const ext = sha1.endsWith('.jpeg') ? 'jpeg' : 'png';
-    const shortSha1 = sha1.replace(/\.(jpeg|png)$/, '').slice(0, 12);
-    const fileName = `frame-${shortSha1}.${ext}`;
+    // The frame sha1 has the form `page@<pageId>-<wallMs>.<ext>`, so a fixed-prefix
+    // slice collides for every frame of the same page. Sanitize the full sha1 to a
+    // filesystem-safe stem so each distinct frame writes to a distinct file.
+    const safeStem = sha1.replace(/\.(jpeg|png)$/, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const fileName = `frame-${safeStem}.${ext}`;
     await fs.promises.writeFile(path.join(outDir, fileName), buf);
     writtenBySha1.set(sha1, fileName);
     return fileName;
@@ -1154,8 +1161,13 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
   }
 
   // ---- Pass 2: render each main-frame snapshot, inlining child iframes ----
+  // When a single phase is requested, skip rendering the other phases entirely.
+  // The final result is filtered by phase anyway, so this avoids the expensive
+  // back-reference DFS for snapshots that would be discarded (e.g. ~3x fewer
+  // renders when only 'action'/input@ snapshots are needed).
   const rawByCallId = new Map<string, Map<string, DomSnapshot>>();
   for (const rec of mainFrameRecords) {
+    if (options?.phase && rec.phase !== options.phase) continue;
     const ctx: RenderContext = {
       frameHistory,
       frameSnapshotsByName,

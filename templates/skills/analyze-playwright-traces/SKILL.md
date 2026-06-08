@@ -169,8 +169,12 @@ What it does:
 
 - creates `<output>/run-<timestamp>/` and writes one folder per failed attempt
 - each folder contains `failure.json` (the full digest), `screenshots/` frames
-  around each failure point, `network-errors.json`, `console-errors.json`,
-  and `error.md` when available
+  around each failure point, `dom/<callId>.html` (the Action-phase DOM at each
+  failure anchor, referenced from `failure.json`), `network-errors.ndjson`
+  (one record per line, with per-anchor timing and 32 KB body spill to
+  `network-error-bodies.ndjson`), `console-errors.ndjson`, and `error.md` when
+  available
+- the NDJSON companions are greppable line-by-line and match the `digest` format
 - the full human-readable error text lives in `error.md`; `failure.json` holds
   the structured step tree and issues with ANSI escape codes stripped
 - mirrors the manifest to `<runDir>/index.json`

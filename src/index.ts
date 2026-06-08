@@ -20,6 +20,7 @@ export {
 } from './extractors';
 
 export { writeFailureDigests } from './failureDigest';
+export { writeTraceDigest } from './digestTrace';
 
 export type {
   ActionDiagnosticSummary,

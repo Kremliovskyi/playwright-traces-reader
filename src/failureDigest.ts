@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
   extractFailureScreenshots,
   getConsoleEntries,
+  getDomSnapshots,
   getSummary,
   getTopLevelFailures,
   type FailureAnchor,
@@ -21,14 +22,18 @@ import {
 } from './parseTrace';
 import {
   CLI_JSON_SCHEMA_VERSION,
-  type ConsoleErrorsFileJson,
   type FailureFolderJson,
   type FailureManifestEntry,
   type FailuresCommandJson,
+  type FailureScreenshotSetJson,
+  type NetworkErrorBaseJson,
+  type NetworkErrorBodyLineJson,
   type NetworkErrorEntryJson,
-  type NetworkErrorsFileJson,
   type NetworkErrorTimingJson,
 } from './cli/json';
+
+/** Response bodies (text) larger than this are spilled into `network-error-bodies.ndjson`. */
+const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
 
 /** Per-trace metadata gathered from the HTML report's `report.json`. */
 interface FailureReportInfo {
@@ -93,6 +98,11 @@ function sanitizeFolderName(value: string): string {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
   return (cleaned || 'failure').slice(0, 80).replace(/-$/, '');
+}
+
+/** Sanitizes a callId (e.g. `pw:api@71`) into a filesystem-safe stem (`pw-api-71`). */
+function sanitizeCallId(callId: string): string {
+  return callId.replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
 
 /**
@@ -169,7 +179,7 @@ function deriveFailureAnchors(summary: TraceSummary): FailureAnchor[] {
 function buildNetworkErrorEntries(
   summary: TraceSummary,
   anchors: FailureAnchor[],
-): NetworkErrorEntryJson[] {
+): NetworkErrorBaseJson[] {
   return summary.networkCalls
     .filter(entry => entry.status >= 400)
     .map(entry => {
@@ -191,6 +201,7 @@ function buildNetworkErrorEntries(
         url: entry.url,
         status: entry.status,
         statusText: entry.statusText,
+        mimeType: entry.mimeType,
         durationMs: entry.durationMs,
         startedDateTime: entry.startedDateTime,
         requestBody: entry.requestBody,
@@ -201,6 +212,64 @@ function buildNetworkErrorEntries(
         timingRelativeToFailures,
       };
     });
+}
+
+/** True when a resolved body is a placeholder for non-text/binary content. */
+function isBinaryBody(body: string | null): boolean {
+  return body !== null && body.startsWith('[binary:');
+}
+
+/**
+ * Promotes triage network-error entries to NDJSON lines: assigns a global `seq`
+ * (chronological by startedDateTime), computes body-spill metadata, and returns
+ * both the inline lines and the spilled-body lines (>32 KB or binary). Aligned
+ * with the `digest` command's `network.ndjson` body-spill contract.
+ */
+function buildNetworkErrorLines(entries: NetworkErrorBaseJson[]): {
+  lines: NetworkErrorEntryJson[];
+  bodies: NetworkErrorBodyLineJson[];
+} {
+  const sorted = [...entries].sort((a, b) => Date.parse(a.startedDateTime) - Date.parse(b.startedDateTime));
+  const lines: NetworkErrorEntryJson[] = [];
+  const bodies: NetworkErrorBodyLineJson[] = [];
+
+  let seq = 1;
+  for (const entry of sorted) {
+    const isBinary = isBinaryBody(entry.responseBody);
+    const bodySizeBytes = entry.responseBody !== null ? Buffer.byteLength(entry.responseBody, 'utf8') : 0;
+    const isLarge = !isBinary && entry.responseBody !== null && bodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+
+    lines.push({
+      ...entry,
+      responseBody: isLarge ? null : entry.responseBody,
+      seq,
+      bodySizeBytes,
+      isBinary,
+      isLarge,
+      bodyRef: isLarge ? seq : null,
+    });
+
+    if (isLarge && entry.responseBody !== null) {
+      bodies.push({
+        seq,
+        url: entry.url,
+        mimeType: entry.mimeType,
+        encoding: 'utf8',
+        bodySizeBytes,
+        body: entry.responseBody,
+      });
+    }
+
+    seq += 1;
+  }
+
+  return { lines, bodies };
+}
+
+/** Serializes records to an NDJSON file (one JSON object per line). */
+async function writeNdjson(filePath: string, records: unknown[]): Promise<void> {
+  const content = records.map(r => JSON.stringify(r)).join('\n');
+  await fs.promises.writeFile(filePath, records.length > 0 ? `${content}\n` : '', 'utf-8');
 }
 
 /**
@@ -325,54 +394,73 @@ async function writeSingleFailure(args: {
     anchors,
     path.join(folderDir, 'screenshots'),
   );
-  const screenshots = screenshotSets.map(set => ({
+
+  // Action-phase DOM nearest each failure anchor, written to disk so the folder
+  // is self-contained (no second `dom --near` call needed for triage). Paired to
+  // the screenshot sets by anchor, aligned with the `digest` command's DOM output.
+  const actionSnapshots = (await getDomSnapshots(ctx, { phase: 'action' }))
+    .map(a => a.action)
+    .filter((s): s is NonNullable<typeof s> => s !== null)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const domByAnchorIndex = new Map<number, string>();
+  if (actionSnapshots.length > 0) {
+    const domDir = path.join(folderDir, 'dom');
+    await fs.promises.mkdir(domDir, { recursive: true });
+    const usedNames = new Set<string>();
+    for (let i = 0; i < anchors.length; i++) {
+      const anchor = anchors[i]!;
+      const nearest = actionSnapshots.reduce((best, cur) =>
+        Math.abs(cur.timestamp - anchor.timestamp) < Math.abs(best.timestamp - anchor.timestamp) ? cur : best,
+      actionSnapshots[0]!);
+      const stem = anchor.callId ? sanitizeCallId(anchor.callId) : `anchor-${i}`;
+      let name = stem;
+      let suffix = 2;
+      while (usedNames.has(name)) { name = `${stem}-${suffix}`; suffix += 1; }
+      usedNames.add(name);
+      const rel = `dom/${name}.html`;
+      await fs.promises.writeFile(path.join(folderDir, rel), nearest.html, 'utf-8');
+      domByAnchorIndex.set(i, rel);
+    }
+  }
+
+  const screenshots: FailureScreenshotSetJson[] = screenshotSets.map((set, i) => ({
     anchorCallId: set.anchorCallId,
     anchorTitle: set.anchorTitle,
     anchorTimestamp: set.anchorTimestamp,
     before: set.before ? `screenshots/${set.before}` : null,
     action: set.action ? `screenshots/${set.action}` : null,
     after: set.after ? `screenshots/${set.after}` : null,
+    dom: domByAnchorIndex.get(i) ?? null,
   }));
   const screenshotCount = screenshots.reduce(
     (total, set) => total + [set.before, set.action, set.after].filter(Boolean).length,
     0,
   );
+  const domCount = domByAnchorIndex.size;
 
-  // Network errors file.
+  // Network errors file (NDJSON, chronological seq, large bodies spilled).
   const networkErrorEntries = buildNetworkErrorEntries(summary, anchors);
   let networkErrorsFile: string | null = null;
+  let networkErrorBodiesFile: string | null = null;
   if (networkErrorEntries.length > 0) {
-    const payload: NetworkErrorsFileJson = {
-      schemaVersion: CLI_JSON_SCHEMA_VERSION,
-      traceSha1,
-      failureAnchors: anchors.map(a => ({ callId: a.callId, title: a.title, timestamp: a.timestamp })),
-      count: networkErrorEntries.length,
-      errors: networkErrorEntries,
-    };
-    networkErrorsFile = 'network-errors.json';
-    await fs.promises.writeFile(
-      path.join(folderDir, networkErrorsFile),
-      `${JSON.stringify(payload, null, 2)}\n`,
-      'utf-8',
-    );
+    const { lines, bodies } = buildNetworkErrorLines(networkErrorEntries);
+    networkErrorsFile = 'network-errors.ndjson';
+    await writeNdjson(path.join(folderDir, networkErrorsFile), lines);
+    if (bodies.length > 0) {
+      networkErrorBodiesFile = 'network-error-bodies.ndjson';
+      await writeNdjson(path.join(folderDir, networkErrorBodiesFile), bodies);
+    }
   }
 
-  // Console errors file.
-  const consoleEntries = (await getConsoleEntries(ctx)).filter(e => e.level === 'error');
+  // Console errors file (NDJSON, chronological).
+  const consoleEntries = (await getConsoleEntries(ctx))
+    .filter(e => e.level === 'error')
+    .sort((a, b) => a.timestamp - b.timestamp);
   let consoleErrorsFile: string | null = null;
   if (consoleEntries.length > 0) {
-    const payload: ConsoleErrorsFileJson = {
-      schemaVersion: CLI_JSON_SCHEMA_VERSION,
-      traceSha1,
-      count: consoleEntries.length,
-      entries: consoleEntries,
-    };
-    consoleErrorsFile = 'console-errors.json';
-    await fs.promises.writeFile(
-      path.join(folderDir, consoleErrorsFile),
-      `${JSON.stringify(payload, null, 2)}\n`,
-      'utf-8',
-    );
+    consoleErrorsFile = 'console-errors.ndjson';
+    await writeNdjson(path.join(folderDir, consoleErrorsFile), consoleEntries);
   }
 
   // Playwright's human-readable error markdown.
@@ -407,9 +495,11 @@ async function writeSingleFailure(args: {
     networkCallCount: summary.networkCalls.length,
     networkErrorCount,
     consoleErrorCount,
+    domCount,
     screenshots,
     files: {
       networkErrors: networkErrorsFile,
+      networkErrorBodies: networkErrorBodiesFile,
       consoleErrors: consoleErrorsFile,
       errorMarkdown: errorMarkdownFile,
     },
@@ -430,6 +520,7 @@ async function writeSingleFailure(args: {
     outcome: summary.outcome,
     traceSha1,
     screenshotCount,
+    domCount,
     networkErrorCount,
     consoleErrorCount,
   };

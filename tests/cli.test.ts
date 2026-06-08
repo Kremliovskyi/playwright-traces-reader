@@ -10,6 +10,17 @@ import {
 
 jest.setTimeout(20000);
 
+interface DigestNode {
+  callId: string;
+  artifacts: {
+    dom: string | null;
+    screenshot: string | null;
+    network: number[];
+    consoleErrors: number;
+  };
+  children: DigestNode[];
+}
+
 async function execCli(args: string[]) {
   let stdout = '';
   let stderr = '';
@@ -84,13 +95,37 @@ describe('playwright-traces-reader CLI', () => {
       const latestDir = path.join(payload.runDir, latest.folder as string);
       const latestJson = JSON.parse(
         await fs.promises.readFile(path.join(latestDir, 'failure.json'), 'utf-8'),
-      ) as { files: { errorMarkdown: string | null; networkErrors: string | null } };
+      ) as {
+        files: { errorMarkdown: string | null; networkErrors: string | null; consoleErrors: string | null };
+        domCount: number;
+        screenshots: Array<{ dom: string | null; action: string | null }>;
+      };
       expect(latest.networkErrorCount).toBe(2);
-      expect(fs.existsSync(path.join(latestDir, 'network-errors.json'))).toBe(true);
+      // Network errors are NDJSON: one complete record per line.
+      expect(latestJson.files.networkErrors).toBe('network-errors.ndjson');
+      expect(fs.existsSync(path.join(latestDir, 'network-errors.ndjson'))).toBe(true);
+      const networkErrorLines = (await fs.promises.readFile(path.join(latestDir, 'network-errors.ndjson'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { seq: number; status: number; timingRelativeToFailures: unknown[] });
+      expect(networkErrorLines).toHaveLength(2);
+      expect(networkErrorLines[0]!.seq).toBe(1);
+      expect(networkErrorLines.every(line => line.status >= 400)).toBe(true);
+      // Triage enrichment is preserved in NDJSON form.
+      expect(Array.isArray(networkErrorLines[0]!.timingRelativeToFailures)).toBe(true);
+      // Console errors are NDJSON.
+      expect(latestJson.files.consoleErrors).toBe('console-errors.ndjson');
+      expect(fs.existsSync(path.join(latestDir, 'console-errors.ndjson'))).toBe(true);
       expect(latestJson.files.errorMarkdown).toBe('error.md');
       expect(fs.existsSync(path.join(latestDir, 'error.md'))).toBe(true);
       expect(Number(latest.screenshotCount)).toBeGreaterThan(0);
       expect(fs.existsSync(path.join(latestDir, 'screenshots'))).toBe(true);
+      // Failure-moment DOM is written to disk and referenced from screenshots.
+      expect(latest.domCount).toBeGreaterThan(0);
+      expect(latestJson.domCount).toBe(latest.domCount);
+      expect(fs.existsSync(path.join(latestDir, 'dom'))).toBe(true);
+      const domRef = latestJson.screenshots.find(set => set.dom)!.dom!;
+      expect(fs.existsSync(path.join(latestDir, domRef))).toBe(true);
     } finally {
       await fs.promises.rm(outDir, { recursive: true, force: true });
     }
@@ -119,6 +154,105 @@ describe('playwright-traces-reader CLI', () => {
   test('failures command requires an output directory', async () => {
     const result = await execCli(['failures', fixture.rootDir]);
     expect(result.exitCode).not.toBe(0);
+  });
+
+  test('digest command writes a chronological step tree with linked artifacts', async () => {
+    const outDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pw-digest-out-'));
+    try {
+      const result = await execCli([
+        'digest',
+        fixture.traces.failedLatest.tracePath,
+        outDir,
+        '--report',
+        fixture.rootDir,
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+
+      const manifest = JSON.parse(result.stdout) as {
+        schemaVersion: number;
+        command: string;
+        runDir: string;
+        folder: string;
+        traceSha1: string;
+        status: string;
+        networkCallCount: number;
+        domCount: number;
+        screenshotCount: number;
+        consoleEntryCount: number;
+      };
+      expect(manifest.schemaVersion).toBe(1);
+      expect(manifest.command).toBe('digest');
+      expect(manifest.traceSha1).toBe(fixture.traces.failedLatest.sha1);
+      expect(manifest.status).toBe('failed');
+      // DOM snapshots and screenshots are paired 1:1.
+      expect(manifest.domCount).toBe(manifest.screenshotCount);
+      expect(manifest.networkCallCount).toBeGreaterThan(0);
+
+      const folderDir = path.join(manifest.runDir, manifest.folder);
+      expect(fs.existsSync(path.join(folderDir, 'network.ndjson'))).toBe(true);
+      expect(fs.existsSync(path.join(folderDir, 'console.ndjson'))).toBe(true);
+
+      const digest = JSON.parse(
+        await fs.promises.readFile(path.join(folderDir, 'digest.json'), 'utf-8'),
+      ) as {
+        command: string;
+        traceSha1: string;
+        files: { network: string; console: string };
+        counts: { networkCalls: number };
+        steps: Array<DigestNode>;
+      };
+      expect(digest.command).toBe('digest');
+      expect(digest.traceSha1).toBe(fixture.traces.failedLatest.sha1);
+
+      // network.ndjson is chronological with a global seq starting at 1.
+      const networkLines = (await fs.promises.readFile(path.join(folderDir, 'network.ndjson'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { seq: number; monotonicTime: number | null; startedDateTime: string });
+      expect(networkLines.length).toBe(digest.counts.networkCalls);
+      expect(networkLines[0]!.seq).toBe(1);
+
+      // Every network seq referenced by a step resolves in network.ndjson, and the
+      // root step's links are a superset of its descendants' (ancestor nesting).
+      const seqSet = new Set(networkLines.map(l => l.seq));
+      const collectLinks = (node: DigestNode, acc: Set<number>): void => {
+        for (const seq of node.artifacts.network) acc.add(seq);
+        for (const child of node.children) collectLinks(child, acc);
+      };
+      let leafWithDom: DigestNode | null = null;
+      const walk = (node: DigestNode): void => {
+        for (const seq of node.artifacts.network) expect(seqSet.has(seq)).toBe(true);
+        if (node.children.length === 0 && node.artifacts.dom) leafWithDom = node;
+        for (const child of node.children) walk(child);
+      };
+      for (const step of digest.steps) walk(step);
+
+      const rootWithLinks = digest.steps.find(step => {
+        const acc = new Set<number>();
+        collectLinks(step, acc);
+        return acc.size > 0;
+      });
+      expect(rootWithLinks).toBeDefined();
+      const rootLinks = new Set<number>();
+      collectLinks(rootWithLinks!, rootLinks);
+      const findChildLinks = (node: DigestNode): void => {
+        for (const child of node.children) {
+          for (const seq of child.artifacts.network) expect(rootLinks.has(seq)).toBe(true);
+          findChildLinks(child);
+        }
+      };
+      findChildLinks(rootWithLinks!);
+
+      // The leaf action with a DOM snapshot also has a paired screenshot file.
+      expect(leafWithDom).not.toBeNull();
+      expect(leafWithDom!.artifacts.screenshot).not.toBeNull();
+      expect(fs.existsSync(path.join(folderDir, leafWithDom!.artifacts.dom!))).toBe(true);
+      expect(fs.existsSync(path.join(folderDir, leafWithDom!.artifacts.screenshot!))).toBe(true);
+    } finally {
+      await fs.promises.rm(outDir, { recursive: true, force: true });
+    }
   });
 
   test('summary command returns a failed trace summary as JSON', async () => {

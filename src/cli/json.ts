@@ -9,6 +9,7 @@ import type {
   SavedAttachment,
   Screenshot,
   TestStep,
+  TraceError,
   TraceIssue,
   TimelineEntry,
   TraceSummary,
@@ -17,7 +18,7 @@ import type { HubReportDescriptor } from './helpers';
 
 export const CLI_JSON_SCHEMA_VERSION = 1 as const;
 
-/** Screencast frames captured around a single failure anchor. */
+/** Screencast frames captured around a single failure anchor, plus the failure-moment DOM. */
 export interface FailureScreenshotSetJson {
   anchorCallId: string | null;
   anchorTitle: string | null;
@@ -28,6 +29,8 @@ export interface FailureScreenshotSetJson {
   action: string | null;
   /** Relative path to the frame after the failure, or null. */
   after: string | null;
+  /** Relative path to the Action-phase DOM html nearest this anchor, or null. */
+  dom: string | null;
 }
 
 /** When a failing network request happened relative to a failure anchor. */
@@ -38,11 +41,12 @@ export interface NetworkErrorTimingJson {
 }
 
 /** A single failing (status ≥ 400) network request enriched for triage. */
-export interface NetworkErrorEntryJson {
+export interface NetworkErrorBaseJson {
   method: string;
   url: string;
   status: number;
   statusText: string;
+  mimeType: string;
   durationMs: number;
   startedDateTime: string;
   requestBody: string | null;
@@ -51,21 +55,28 @@ export interface NetworkErrorEntryJson {
   timingRelativeToFailures: NetworkErrorTimingJson[];
 }
 
-/** Contents of the per-failure `network-errors.json` file. */
-export interface NetworkErrorsFileJson {
-  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
-  traceSha1: string;
-  failureAnchors: Array<{ callId: string | null; title: string | null; timestamp: number }>;
-  count: number;
-  errors: NetworkErrorEntryJson[];
+/**
+ * One line in a failure folder's `network-errors.ndjson`. Carries the triage
+ * enrichment plus a global `seq` and body-spill metadata aligned with the
+ * `digest` command's `network.ndjson`. When `isLarge` is true, `responseBody` is
+ * null and the body lives in `network-error-bodies.ndjson` under the same `seq`.
+ */
+export interface NetworkErrorEntryJson extends NetworkErrorBaseJson {
+  seq: number;
+  bodySizeBytes: number;
+  isBinary: boolean;
+  isLarge: boolean;
+  bodyRef: number | null;
 }
 
-/** Contents of the per-failure `console-errors.json` file. */
-export interface ConsoleErrorsFileJson {
-  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
-  traceSha1: string;
-  count: number;
-  entries: ConsoleEntry[];
+/** One line in a failure folder's `network-error-bodies.ndjson` (a spilled large body). */
+export interface NetworkErrorBodyLineJson {
+  seq: number;
+  url: string;
+  mimeType: string;
+  encoding: 'utf8';
+  bodySizeBytes: number;
+  body: string;
 }
 
 /** Per-failure `failure.json` written into each failure folder. */
@@ -86,10 +97,12 @@ export interface FailureFolderJson {
   networkCallCount: number;
   networkErrorCount: number;
   consoleErrorCount: number;
+  domCount: number;
   screenshots: FailureScreenshotSetJson[];
   /** Relative paths (from the failure folder) to companion artifact files, or null when absent. */
   files: {
     networkErrors: string | null;
+    networkErrorBodies: string | null;
     consoleErrors: string | null;
     errorMarkdown: string | null;
   };
@@ -105,6 +118,7 @@ export interface FailureManifestEntry {
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
   traceSha1: string;
   screenshotCount: number;
+  domCount: number;
   networkErrorCount: number;
   consoleErrorCount: number;
 }
@@ -144,6 +158,112 @@ export interface SummaryCommandJson {
   schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
   command: 'summary';
   summary: TraceSummary;
+}
+
+/** One line in a digest's `network.ndjson` (one HTTP exchange). */
+export interface NetworkLineJson {
+  seq: number;
+  monotonicTime: number | null;
+  startedDateTime: string;
+  source: 'browser' | 'api';
+  method: string;
+  url: string;
+  status: number;
+  statusText: string;
+  mimeType: string;
+  durationMs: number;
+  requestHeaders: Array<{ name: string; value: string }>;
+  responseHeaders: Array<{ name: string; value: string }>;
+  requestBody: string | null;
+  /** Inline response body, or null when spilled (see `bodyRef`) or absent. */
+  responseBody: string | null;
+  bodySizeBytes: number;
+  isBinary: boolean;
+  /** True when the response body was spilled to `network-bodies.ndjson`. */
+  isLarge: boolean;
+  /** Seq id to look up the spilled body in `network-bodies.ndjson`, or null. */
+  bodyRef: number | null;
+  relatedActionCallId: string | null;
+}
+
+/** One line in a digest's `network-bodies.ndjson` (a spilled large body). */
+export interface NetworkBodyLineJson {
+  seq: number;
+  url: string;
+  mimeType: string;
+  encoding: 'utf8';
+  bodySizeBytes: number;
+  body: string;
+}
+
+/** A single node in the digest chronological step tree. */
+export interface DigestStepNode {
+  callId: string;
+  parentId: string | null;
+  title: string;
+  method: string;
+  startTime: number;
+  endTime: number | null;
+  durationMs: number | null;
+  error: TraceError | null;
+  artifacts: {
+    /** Relative path to the Action-phase DOM html for this leaf action, or null. */
+    dom: string | null;
+    /** Relative path to the nearest screenshot for this leaf action, or null. */
+    screenshot: string | null;
+    /** Seq ids (in `network.ndjson`) of all network calls within this step's window. */
+    network: number[];
+    /** Count of console errors within this step's window. */
+    consoleErrors: number;
+  };
+  children: DigestStepNode[];
+}
+
+/** Per-digest `digest.json` written into the digest folder. */
+export interface DigestFolderJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'digest';
+  testTitle: string | null;
+  title: string;
+  status: 'passed' | 'failed';
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+  durationMs: number | null;
+  retryIndex: number;
+  traceSha1: string;
+  tracePath: string;
+  counts: {
+    steps: number;
+    leafActionsWithDom: number;
+    screenshots: number;
+    networkCalls: number;
+    networkBodiesSpilled: number;
+    consoleEntries: number;
+  };
+  files: {
+    network: string;
+    networkBodies: string | null;
+    console: string;
+  };
+  steps: DigestStepNode[];
+}
+
+/** Compact digest manifest emitted to stdout. */
+export interface DigestCommandJson {
+  schemaVersion: typeof CLI_JSON_SCHEMA_VERSION;
+  command: 'digest';
+  outputDir: string;
+  runDir: string;
+  folder: string;
+  testTitle: string | null;
+  title: string;
+  status: 'passed' | 'failed';
+  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+  retryIndex: number;
+  traceSha1: string;
+  domCount: number;
+  screenshotCount: number;
+  networkCallCount: number;
+  consoleEntryCount: number;
 }
 
 export interface SlowStepsCommandJson {
@@ -251,6 +371,7 @@ export type CliCommandJson =
   | PrepareReportCommandJson
   | FailuresCommandJson
   | SummaryCommandJson
+  | DigestCommandJson
   | SlowStepsCommandJson
   | StepsCommandJson
   | NetworkCommandJson

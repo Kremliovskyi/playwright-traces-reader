@@ -13,6 +13,7 @@ import type {
   TraceSummary,
 } from '../index';
 import type { FailuresCommandJson } from './json';
+import type { DigestCommandJson } from './json';
 import type { HubReportDescriptor } from './helpers';
 
 export type OutputFormat = 'text' | 'json';
@@ -78,11 +79,22 @@ export function formatFailuresText(manifest: FailuresCommandJson): string {
       `${index + 1}. [${failure.outcome ?? failure.status}] ${title} (retry ${failure.retryIndex})`,
       `   Folder: ${failure.folder}`,
       `   Trace SHA1: ${failure.traceSha1}`,
-      `   Screenshots: ${failure.screenshotCount} | Network errors: ${failure.networkErrorCount} | Console errors: ${failure.consoleErrorCount}`,
+      `   Screenshots: ${failure.screenshotCount} | DOM: ${failure.domCount} | Network errors: ${failure.networkErrorCount} | Console errors: ${failure.consoleErrorCount}`,
     ].join('\n');
   }).join('\n\n');
 
   return `${header}\n\n${failureText}`;
+}
+
+export function formatDigestText(manifest: DigestCommandJson): string {
+  const title = manifest.testTitle ?? manifest.title;
+  return [
+    `Wrote digest for [${manifest.outcome ?? manifest.status}] ${title} (retry ${manifest.retryIndex})`,
+    `Folder: ${manifest.runDir}/${manifest.folder}`,
+    `Digest: ${manifest.runDir}/${manifest.folder}/digest.json`,
+    `Trace SHA1: ${manifest.traceSha1}`,
+    `DOM: ${manifest.domCount} | Screenshots: ${manifest.screenshotCount} | Network: ${manifest.networkCallCount} | Console: ${manifest.consoleEntryCount}`,
+  ].join('\n');
 }
 
 export function formatSummaryText(summary: TraceSummary): string {

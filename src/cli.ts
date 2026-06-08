@@ -18,6 +18,7 @@ import {
   findTraces,
 } from './index';
 import { writeFailureDigests } from './failureDigest';
+import { writeTraceDigest } from './digestTrace';
 import {
   copySkillTemplate,
   DEFAULT_REPORTS_HUB_BASE_URL,
@@ -36,6 +37,7 @@ import {
   formatPrepareReportText,
   formatRequestText,
   formatSearchReportsText,
+  formatDigestText,
   formatDomSnapshotsText,
   formatErrorsText,
   formatFailuresText,
@@ -198,6 +200,19 @@ function buildProgram(io: CliIo): Command {
       });
 
       emitOutput(io, options.format, manifest, formatFailuresText(manifest));
+    });
+
+  program
+    .command('digest <tracePath> <outputDir>')
+    .description('Digest one trace (any status) into a chronological step tree linked to DOM, screenshots, network (NDJSON), and console under outputDir')
+    .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
+    .option('--report <reportPath>', 'Optional report root or data directory used to load report metadata')
+    .action(async (tracePath: string, outputDir: string, options: { format: OutputFormat; report?: string }) => {
+      const traceContext = await prepareTraceDir(tracePath);
+      const reportMetadata = await loadReportMetadataForTrace(traceContext, options.report);
+      const manifest = await writeTraceDigest(traceContext, outputDir, { reportMetadata });
+
+      emitOutput(io, options.format, manifest, formatDigestText(manifest));
     });
 
   program

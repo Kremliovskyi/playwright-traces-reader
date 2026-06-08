@@ -10,7 +10,8 @@ See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON o
 
 - Search a local `playwright-reports` hub for reports by metadata, date, and recency before parsing (`search-reports`, `prepare-report`)
 - Read vault analysis markdown files from the hub when reports have associated analysis notes (`vault-read`)
-- Digest every failing attempt in a report into one self-contained folder on disk — `failure.json`, extracted screenshots, network/console errors, and a cleaned `error.md` — plus an `index.json` manifest (`failures` CLI command)
+- Digest every failing attempt in a report into one self-contained folder on disk — `failure.json`, extracted screenshots, the failure-moment DOM (`dom/<callId>.html`), NDJSON network/console errors (with 32 KB body spill), and a cleaned `error.md` — plus an `index.json` manifest (`failures` CLI command)
+- Digest one whole trace (any status) into a chronological step tree linked to per-action DOM, screenshots, network, and console — for deep single-test analysis (`digest` CLI command)
 - Find all unique failed tests across a report in one call — retries deduplicated, passing tests excluded, last retry selected automatically (`getFailedTestSummaries`)
 - One-call failure summary: title, error, step tree, slowest steps, API calls, issues, related-action diagnostics, and DOM snapshot at failure (`getSummary`)
 - Extract test steps with timings and errors (`getTestSteps`, `getTopLevelFailures`)
@@ -41,6 +42,7 @@ The package exposes a local CLI. In a repository that has the package installed,
 npx playwright-traces-reader search-reports "UAT EU" --limit 1
 npx playwright-traces-reader prepare-report <reportRef>
 npx playwright-traces-reader failures ./playwright-report ./trace-analysis
+npx playwright-traces-reader digest ./playwright-report/data/<sha1> ./trace-analysis
 npx playwright-traces-reader find-traces ./playwright-report "test name"
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader network ./playwright-report/data/<sha1>
@@ -54,6 +56,7 @@ Phase 1 commands:
 - `vault-read <filename>` — read a vault analysis markdown file from the hub (supports `--out` to save to a local file)
 - `init-skills [targetDir]` — scaffold the GitHub Copilot skill into a repository
 - `failures <reportPath> <outputDir>` — digest failing attempts into self-contained folders on disk
+- `digest <tracePath> <outputDir>` — digest one whole trace into a chronological step tree linked to DOM, screenshots, network (NDJSON), and console
 - `find-traces <reportPath> <grep>` — find trace paths for tests matching a name pattern
 - `summary <tracePath>` — one-call trace summary
 - `slow-steps <tracePath>` — slowest steps from a single trace
@@ -92,14 +95,20 @@ self-contained folder per failed attempt (each failed retry included, no dedup) 
 `<outputDir>/run-<timestamp>/`. Each folder holds `failure.json` (title, step tree,
 slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
 reference at failure — ANSI escape codes stripped from step/issue messages),
-already-extracted screenshots, `network-errors.json`, `console-errors.json`, and
-`error.md` (Playwright's human-readable error — the single source of the full error
+already-extracted screenshots, the Action-phase DOM at each failure anchor
+(`dom/<callId>.html`, referenced from each `screenshots[]` set so no follow-up
+`dom --near` is needed), `network-errors.ndjson` (failing requests with per-anchor
+timing and 32 KB body spill to `network-error-bodies.ndjson`), `console-errors.ndjson`,
+and `error.md` (Playwright's human-readable error — the single source of the full error
 text — with its generic `# Instructions` preamble stripped, diagnostic sections kept
-verbatim) when available. A manifest is printed to stdout and mirrored to
+verbatim) when available. The NDJSON companions and body-spill rule are aligned with the
+`digest` command. A manifest is printed to stdout and mirrored to
 `<runDir>/index.json`. Read a failure folder directly; run `summary <tracePath>` only
 when you need extra detail for one selected failure.
 
 `find-traces` is a discovery command for locating any test's trace — including passed tests. It matches a regex against full test titles and returns trace paths for all retries, with optional `--outcome` filtering.
+
+`digest` is the deep single-trace command. Unlike `failures` (which targets failure points across a report), it captures one whole test — passed, failed, or flaky — as a chronological step tree. Each leaf action with an `input@` snapshot gets one Action-phase DOM (`dom/<callId>.html`) and the nearest screenshot (`screenshots/<callId>.png`), paired 1:1. Every step links the `seq` ids of all network calls within its time window, so a parent's links are a superset of its descendants'. Network is written as chronological NDJSON (`network.ndjson`, one exchange per line, global `seq`); response bodies over 32 KB are spilled to `network-bodies.ndjson` with a `bodyRef` and `bodySizeBytes` so consumers decide before reading. Console output goes to `console.ndjson`. The pretty-printed `digest.json` is the entry point and references all companion files relatively.
 
 Typical CLI workflow:
 
@@ -113,6 +122,13 @@ Trace discovery workflow:
 ```bash
 npx playwright-traces-reader find-traces ./playwright-report "login" --outcome expected
 npx playwright-traces-reader summary <tracePath> --report ./playwright-report
+```
+
+Deep single-trace workflow:
+
+```bash
+npx playwright-traces-reader find-traces ./playwright-report "login"
+npx playwright-traces-reader digest <tracePath> ./trace-analysis --report ./playwright-report
 ```
 
 Hub-assisted workflow:

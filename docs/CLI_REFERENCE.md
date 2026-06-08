@@ -28,6 +28,7 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 | `failures` | report | Digest failing tests into per-failure folders under an output directory |
 | `find-traces` | report | Find trace paths for tests matching a name pattern |
 | `summary` | trace | Return one complete summary for a single trace |
+| `digest` | trace | Digest one whole trace into a chronological step tree linked to DOM, screenshots, network, and console |
 | `slow-steps` | trace | Return the slowest steps for a single trace |
 | `steps` | trace | Reconstruct and print the step tree |
 | `network` | trace | Inspect API and browser network traffic |
@@ -185,9 +186,12 @@ Behavior:
 - passing tests are excluded
 - one folder is written per failed attempt, including each failed retry (no dedup)
 - folders are created under `<outputDir>/run-<timestamp>/`
-- each folder contains `failure.json` plus `screenshots/`, `network-errors.json`,
-  `console-errors.json`, and `error.md` when available (its `# Instructions`
-  preamble is stripped, diagnostic sections kept verbatim)
+- each folder contains `failure.json` plus `screenshots/`, the Action-phase DOM at
+  each failure anchor (`dom/<callId>.html`, referenced from `failure.json`),
+  `network-errors.ndjson` (one record per line, per-anchor timing, 32 KB body spill to
+  `network-error-bodies.ndjson`), `console-errors.ndjson`, and `error.md` when available
+  (its `# Instructions` preamble is stripped, diagnostic sections kept verbatim)
+- the NDJSON companions and body-spill rule are aligned with the `digest` command
 - the manifest is printed to stdout and mirrored to `<runDir>/index.json`
 - read a failure folder directly; use `summary <tracePath>` only for extra detail
 
@@ -269,6 +273,45 @@ Examples:
 ```bash
 npx playwright-traces-reader summary ./playwright-report/data/<sha1>
 npx playwright-traces-reader summary ./playwright-report/data/<sha1> --report ./playwright-report --format text
+```
+
+## `digest`
+
+Digests one whole trace (any status) into a self-contained folder under a
+timestamped run directory. Where `summary` returns an in-memory overview and
+`failures` focuses on failure points, `digest` captures the entire test as a
+chronological step tree with every step linked to its artifacts.
+
+Usage:
+
+```bash
+npx playwright-traces-reader digest <tracePath> <outputDir> [--report <reportPath>] [--format json|text]
+```
+
+Accepted inputs:
+
+- extracted trace directory
+- trace zip
+
+Behavior:
+
+- works for passed, failed, and flaky traces
+- writes `digest.json` (chronological step tree), `network.ndjson` + optional
+  `network-bodies.ndjson`, and `console.ndjson` into the digest folder
+- each leaf action with an `input@` snapshot gets one Action-phase DOM
+  (`dom/<callId>.html`) and the nearest screenshot (`screenshots/<callId>.png`),
+  paired 1:1
+- every step links the seq ids of all network calls in its time window; a parent's
+  links are a superset of its descendants'
+- large response bodies (> 32 KB) are spilled to `network-bodies.ndjson`; each line
+  carries `bodySizeBytes` so consumers can decide before reading
+- `--report` improves outcome/retry resolution by loading report metadata explicitly
+
+Examples:
+
+```bash
+npx playwright-traces-reader digest ./playwright-report/data/<sha1> ./trace-analysis
+npx playwright-traces-reader digest ./playwright-report/data/<sha1> ./trace-analysis --report ./playwright-report --format text
 ```
 
 ## `slow-steps`

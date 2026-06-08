@@ -62,6 +62,8 @@ All trace files are newline-delimited JSON.
 src/
   parseTrace.ts         low-level artifact discovery and file access
   extractors.ts         high-level parsing and summarization APIs
+  failureDigest.ts      per-report failure digest writer (failures command)
+  digestTrace.ts        per-trace whole-test digest writer (digest command)
   index.ts              public exports
   cli.ts                command-line entry point
   cli/
@@ -125,14 +127,14 @@ Core extractors:
 
 - `getTestSteps(ctx)` reconstructs the nested step tree from `test.trace`.
 - `getTopLevelFailures(ctx)` returns only root steps with errors.
-- `getNetworkTraffic(ctx, options?)` parses all `*.network` files, resolves bodies from `resources/`, assigns per-trace request IDs, and correlates requests to nearby browser actions.
+- `getNetworkTraffic(ctx, options?)` parses all `*.network` files, resolves bodies from `resources/`, assigns per-trace request IDs, correlates requests to nearby browser actions, and records each request's `monotonicTime` (from the resource snapshot's `_monotonicTime`) for time-window linking against the step tree.
 - `getNetworkRequest(ctx, requestId)` returns one detailed request by the per-trace ID returned from `getNetworkTraffic()`.
 - `getConsoleEntries(ctx)` extracts browser console, page-error, stdout, and stderr signals.
 - `getTraceIssues(ctx)` combines step failures, page errors, and trace-level issues into one correlated issue stream.
 - `getAttachments(ctx)` lists trace attachments with per-trace attachment IDs.
 - `extractAttachment(ctx, attachmentId, outputPath?)` resolves and writes one attachment by its per-trace ID.
 - `extractScreenshots(ctx, outDir)` writes screencast frames to disk and returns metadata.
-- `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`. It resolves Playwright's compact snapshot format (text, back-references, elements) and recursively inlines child `<iframe>`/`<frame>` snapshots into the parent as `srcdoc`, producing self-contained HTML. Frames are matched by `frameId` (from `src="/snapshot/<frameId>"`) and the action's `snapshotName`; cycles and depth are guarded.
+- `getDomSnapshots(ctx, options?)` groups `before`, `action`, and `after` snapshots by `callId`. It resolves Playwright's compact snapshot format (text, back-references, elements) and recursively inlines child `<iframe>`/`<frame>` snapshots into the parent as `srcdoc`, producing self-contained HTML. Frames are matched by `frameId` (from `src="/snapshot/<frameId>"`) and the action's `snapshotName`; cycles and depth are guarded. When `options.phase` is set, only that phase is rendered — the expensive back-reference DFS is skipped for the discarded phases (~3x fewer renders when only `action`/`input@` snapshots are needed).
 - `getTimeline(ctx)` merges step, screenshot, DOM, and network events into one chronological stream.
 - `getTestTitle(ctx)` reads `context-options` and returns the canonical full test title.
 
@@ -150,6 +152,7 @@ Main APIs:
 - `getFailedTraceSelections(reportDataDir, options?)` selects the winning failed traces and pairs them with trace identity metadata.
 - `getFailedTestSummaries(reportDataDir, options?)` performs report-level failure analysis and retry deduplication.
 - `writeFailureDigests(reportDataDir, outputDir, options?)` writes one self-contained folder per failed attempt (including each failed retry) and returns the run manifest.
+- `writeTraceDigest(ctx, outputDir, options?)` writes one self-contained folder for a single trace (any status) and returns a compact manifest. Implemented in `digestTrace.ts`.
 
 Important current behavior:
 
@@ -163,7 +166,8 @@ Important current behavior:
 - `getFailedTestSummaries()` deduplicates retries by `testId` when report metadata exists, then falls back to `getTestTitle()`, then `traceDir`.
 - `getFailedTestSummaries()` keeps the last retry by comparing the latest root-step end time.
 - `getFailedTraceSelections()` reuses the same retry-selection logic but returns both the selected trace identity (`tracePath`, `traceSha1`) and the rich `TraceSummary`.
-- `writeFailureDigests()` walks every trace with root-step failures (no retry dedup), and for each writes a folder with `failure.json`, screenshots around failure anchors, network errors, console errors, and Playwright's error markdown when present. The `failure.json` carries a lightweight `failureDomSnapshot` pointer (callId/phases/timestamp/frameUrl/targetElement); full DOM HTML is fetched on demand via `dom --near <callId>`.
+- `writeFailureDigests()` walks every trace with root-step failures (no retry dedup), and for each writes a folder with `failure.json`, screenshots around failure anchors, the Action-phase DOM at each anchor (`dom/<callId>.html`, referenced from `screenshots[]`), `network-errors.ndjson` (failing requests with per-anchor timing and 32 KB body spill to `network-error-bodies.ndjson`), `console-errors.ndjson`, and Playwright's error markdown when present. The `failure.json` still carries the lightweight `failureDomSnapshot` pointer (callId/phases/timestamp/frameUrl/targetElement) for the in-memory summary, but the failure-moment DOM html is now on disk too — so triage needs no follow-up `dom --near <callId>` call. The NDJSON companions and body-spill rule are aligned with the `digest` command's `network.ndjson`.
+- `writeTraceDigest()` digests a single trace into a folder whose spine is the chronological step tree (`digest.json`). Each leaf action with an `input@` snapshot gets one Action-phase DOM (`dom/<callId>.html`) and the nearest screencast frame (`screenshots/<callId>.png`), paired 1:1 by sanitized `callId`. Every step links the global `seq` ids of all network calls whose `monotonicTime` falls within its `[startTime, endTime]` window, so a parent's links are a superset of its descendants'. Network is written as chronological NDJSON (`network.ndjson`, one exchange per line, global `seq`); text/JSON response bodies over 32 KB are spilled to `network-bodies.ndjson` (back-linked by `seq`), and each line keeps `bodySizeBytes` + `isLarge` so consumers decide before reading. Console output is written to `console.ndjson`. Unlike `getSummary()`/`writeFailureDigests()`, it covers the whole test rather than failure points, and works for passed, failed, and flaky traces.
 
 This is the main library interface for consumers that need analysis rather than raw events.
 
@@ -179,6 +183,7 @@ Command surface:
 - `prepare-report <reportRef>`
 - `init-skills [targetDir]`
 - `failures <reportPath> <outputDir>`
+- `digest <tracePath> <outputDir>`
 - `find-traces <reportPath> <grep>`
 - `summary <tracePath>`
 - `slow-steps <tracePath>`
@@ -208,7 +213,8 @@ Current CLI contract choices:
 
 - JSON is the default output mode for all commands.
 - `search-reports` and `prepare-report` are discovery commands that stop at local path resolution.
-- `failures` writes one self-contained folder per failed attempt into a timestamped run directory and returns a compact manifest on stdout.
+- `failures` writes one self-contained folder per failed attempt into a timestamped run directory and returns a compact manifest on stdout. Each folder bundles `failure.json`, screenshots and the Action-phase DOM at each failure anchor, NDJSON network/console errors (`network-errors.ndjson` + optional `network-error-bodies.ndjson`, `console-errors.ndjson`), and Playwright's `error.md`. The NDJSON formats and 32 KB body-spill rule match the `digest` command.
+- `digest` writes one self-contained folder for a single trace (any status) into a timestamped run directory and returns a compact manifest on stdout. The folder bundles `digest.json` (the chronological step tree with per-step artifact links), per-leaf-action DOM and screenshots paired 1:1, chronological `network.ndjson` (+ optional `network-bodies.ndjson` for spilled large bodies), and `console.ndjson`. Network is linked to steps by `monotonicTime` window.
 - `summary` remains the full deep-inspection payload for one trace, including issues and action diagnostics. The `failureDomSnapshot` field is a lightweight metadata reference (callId, phases, timestamp, frameUrl) rather than full HTML, keeping the JSON payload small.
 - `dom` always writes full DOM snapshots to a file (`--output` is required). Stdout receives a lightweight confirmation with `savedPath`, `count`, and `callIds` — never the full HTML.
 - `network` is the listing surface for discovering per-trace `requestId` values later consumed by `request`.

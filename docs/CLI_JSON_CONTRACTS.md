@@ -74,6 +74,7 @@ prints a compact manifest to stdout. The manifest is also mirrored to
       "outcome": "unexpected",
       "traceSha1": "trace-fail-latest",
       "screenshotCount": 3,
+      "domCount": 1,
       "networkErrorCount": 2,
       "consoleErrorCount": 1
     }
@@ -98,6 +99,7 @@ Each manifest entry includes:
 - `outcome` — report outcome when metadata is available
 - `traceSha1` — trace directory identifier
 - `screenshotCount` — number of screenshot frames written into the folder
+- `domCount` — number of failure-anchor DOM html files written into the folder
 - `networkErrorCount` — number of network entries with status >= 400
 - `consoleErrorCount` — number of console error entries
 
@@ -109,10 +111,19 @@ Each `<runDir>/<folder>/` contains:
   references inside `files` are relative to the folder.
 - `screenshots/frame-*.{png,jpeg}` — screencast frames nearest each failure
   anchor (`before`, `action`, `after`). Absent for API-only traces with no frames.
-- `network-errors.json` — failing network requests (status >= 400) with timing
-  correlated to each failure anchor (`before` / `during` / `after` / `unknown`).
-  Omitted when there are no failing requests.
-- `console-errors.json` — browser/stderr console errors. Omitted when none.
+- `dom/<callId>.html` — Action-phase DOM nearest each failure anchor, named by the
+  anchor's sanitized `callId` (or `anchor-<index>` when the anchor has no callId).
+  Each set in `screenshots[]` references its file via the `dom` field. This makes the
+  folder self-contained — no follow-up `dom --near` call is needed for triage.
+- `network-errors.ndjson` — failing network requests (status >= 400), one record per
+  line, chronological with a global `seq`, each carrying `timingRelativeToFailures`
+  (`before` / `during` / `after` / `unknown` per failure anchor). Response bodies over
+  32 KB are spilled (see below). Omitted when there are no failing requests. Aligned
+  with the `digest` command's `network.ndjson` format.
+- `network-error-bodies.ndjson` — spilled large response bodies (`{ seq, url, mimeType,
+  encoding, bodySizeBytes, body }`), back-linked by `seq`. Omitted when none spilled.
+- `console-errors.ndjson` — browser/stderr console errors, one record per line,
+  chronological. Omitted when none.
 - `error.md` — Playwright's human-readable error markdown, copied when present.
   The leading `# Instructions` preamble (generic "explain and fix the test"
   guidance) is stripped; the diagnostic sections (`# Test info`, `# Error
@@ -125,10 +136,111 @@ Each `<runDir>/<folder>/` contains:
 - `topLevelSteps`, `issues`, `actionDiagnostics`, `failureDomSnapshot` — ANSI
   escape codes are stripped from any step error and issue message/stack. The full
   human-readable error lives in `error.md`.
-- `networkCallCount`, `networkErrorCount`, `consoleErrorCount`
-- `screenshots` — per-anchor relative paths (`before` / `action` / `after`, or null)
-- `files` — relative paths to companion files (`networkErrors`, `consoleErrors`,
-  `errorMarkdown`), each null when the file was not written
+- `networkCallCount`, `networkErrorCount`, `consoleErrorCount`, `domCount`
+- `screenshots` — per-anchor relative paths (`before` / `action` / `after`, plus
+  `dom` for the failure-moment DOM html), each null when absent
+- `files` — relative paths to companion files (`networkErrors`, `networkErrorBodies`,
+  `consoleErrors`, `errorMarkdown`), each null when the file was not written
+
+Each `network-errors.ndjson` line carries the triage fields (`method`, `url`, `status`,
+`statusText`, `mimeType`, `durationMs`, `startedDateTime`, `requestBody`, `responseBody`,
+`relatedAction`, `timingRelativeToFailures`) plus `seq`, `bodySizeBytes`, `isBinary`,
+`isLarge`, and `bodyRef`. When `isLarge` is true, `responseBody` is null and `bodyRef`
+holds the `seq` to look up the body in `network-error-bodies.ndjson`.
+
+### `digest`
+
+`digest <tracePath> <outputDir>` digests a single trace (any status) into one
+self-contained folder under a timestamped run directory and prints a compact
+manifest to stdout. Unlike `failures`, it covers the whole test — not just
+failure points — and links every step to its artifacts.
+
+```json
+{
+  "schemaVersion": 1,
+  "command": "digest",
+  "outputDir": "/absolute/path/to/output",
+  "runDir": "/absolute/path/to/output/run-2026-06-08T14-03-38-855Z",
+  "folder": "e2e-...-spec-ts-613-order-core__retry0",
+  "testTitle": "tests/example.spec.ts:10 › suite › test",
+  "title": "main step",
+  "status": "passed",
+  "outcome": "expected",
+  "retryIndex": 0,
+  "traceSha1": "2cfaf336...",
+  "domCount": 436,
+  "screenshotCount": 436,
+  "networkCallCount": 6136,
+  "consoleEntryCount": 846
+}
+```
+
+Manifest fields:
+
+- `outputDir`, `runDir`, `folder` — resolved output dir, timestamped run subfolder, and the digest folder name
+- `testTitle`, `title`, `status`, `outcome`, `retryIndex`, `traceSha1`
+- `domCount` / `screenshotCount` — paired 1:1 (one Action-phase DOM + nearest screenshot per leaf action that has an `input@` snapshot)
+- `networkCallCount`, `consoleEntryCount`
+
+#### Digest folder layout
+
+Each `<runDir>/<folder>/` contains:
+
+- `digest.json` — the full chronological step tree (see below). The pretty-printed
+  entry point; companion file references are relative to the folder.
+- `dom/<callId>.html` — Action-phase DOM html, one per leaf action with an `input@`
+  snapshot. Absent for actions without one (e.g. assertions, waits, API calls).
+- `screenshots/<callId>.png|jpeg` — the screencast frame nearest the action's input
+  moment, paired 1:1 with the DOM file by sanitized `callId`.
+- `network.ndjson` — every HTTP exchange, one record per line, chronological, with a
+  global `seq`. Small text/JSON bodies are inlined; bodies over 32 KB are spilled.
+- `network-bodies.ndjson` — spilled large response bodies (`{ seq, url, mimeType,
+  encoding, bodySizeBytes, body }`), back-linked by `seq`. Omitted when none.
+- `console.ndjson` — console / page-error / stdout / stderr entries, chronological.
+
+`digest.json` fields:
+
+- `testTitle`, `title`, `status`, `outcome`, `durationMs`, `retryIndex`, `traceSha1`, `tracePath`
+- `counts` — `steps`, `leafActionsWithDom`, `screenshots`, `networkCalls`, `networkBodiesSpilled`, `consoleEntries`
+- `files` — relative names of the NDJSON companions (`network`, `networkBodies`, `console`)
+- `steps` — the chronological step tree. Each node has `callId`, `parentId`, `title`,
+  `method`, `startTime`, `endTime`, `durationMs`, `error` (ANSI-stripped), `children`,
+  and an `artifacts` object:
+  - `dom` / `screenshot` — relative paths for leaf actions, else null
+  - `network` — seq ids of **all** network calls whose monotonic time falls within
+    the step's window. Because steps nest in time, a parent's list is a superset of
+    its descendants'.
+  - `consoleErrors` — count of console errors within the step's window
+
+#### `network.ndjson` line
+
+```json
+{
+  "seq": 186,
+  "monotonicTime": 388751.16,
+  "startedDateTime": "2026-06-01T05:14:19.807Z",
+  "source": "browser",
+  "method": "POST",
+  "url": "https://.../api/v1/orders/v2/next-feature",
+  "status": 200,
+  "statusText": "OK",
+  "mimeType": "application/json",
+  "durationMs": 120.5,
+  "requestHeaders": [],
+  "responseHeaders": [],
+  "requestBody": "...",
+  "responseBody": "...",
+  "bodySizeBytes": 1234,
+  "isBinary": false,
+  "isLarge": false,
+  "bodyRef": null,
+  "relatedActionCallId": null
+}
+```
+
+When `isLarge` is true, `responseBody` is null and `bodyRef` holds the `seq` to look
+up the body in `network-bodies.ndjson`. Agents should read `bodySizeBytes` before
+fetching a spilled body.
 
 ### `find-traces`
 
