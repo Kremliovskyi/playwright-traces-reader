@@ -146,10 +146,23 @@ function buildFailureReportIndex(
         }
 
         if (traceSha1) {
+          let status = result.status ?? null;
+          if (status === null) {
+            if (test.outcome === 'skipped') {
+              status = 'skipped';
+            } else if (test.outcome === 'unexpected') {
+              status = 'failed';
+            } else if (test.outcome === 'flaky') {
+              status = retryIndex < test.results.length - 1 ? 'failed' : 'passed';
+            } else if (test.outcome === 'expected') {
+              status = test.ok ? 'passed' : 'failed';
+            }
+          }
+
           index.set(traceSha1, {
             outcome: test.outcome,
             retryIndex,
-            status: result.status ?? null,
+            status,
             markdownPath: markdownPath && fs.existsSync(markdownPath) ? markdownPath : null,
           });
         }

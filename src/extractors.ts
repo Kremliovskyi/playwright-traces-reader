@@ -1724,7 +1724,40 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
     null;
 
   const title = mainRoot?.title ?? 'Unknown';
-  const status: 'passed' | 'failed' = roots.some(r => r.error !== null) ? 'failed' : 'passed';
+  let status: 'passed' | 'failed' = roots.some(r => r.error !== null) ? 'failed' : 'passed';
+  if (status === 'passed' && options.reportMetadata) {
+    const sha1 = path.basename(traceContext.traceDir);
+    const traceMaps = options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata);
+    const outcome = traceMaps.outcomeByTraceSha1.get(sha1);
+    const retryIndex = traceMaps.retryByTraceSha1.get(sha1) ?? 0;
+    if (outcome === 'unexpected') {
+      status = 'failed';
+    } else if (outcome === 'flaky') {
+      let resultsLength = 1;
+      for (const file of options.reportMetadata.files) {
+        const test = file.tests.find(t => t.testId === traceMaps.testIdByTraceSha1.get(sha1));
+        if (test) {
+          resultsLength = test.results.length;
+          break;
+        }
+      }
+      if (retryIndex < resultsLength - 1) {
+        status = 'failed';
+      }
+    } else if (outcome === 'expected') {
+      let ok = true;
+      for (const file of options.reportMetadata.files) {
+        const test = file.tests.find(t => t.testId === traceMaps.testIdByTraceSha1.get(sha1));
+        if (test) {
+          ok = test.ok;
+          break;
+        }
+      }
+      if (!ok) {
+        status = 'failed';
+      }
+    }
+  }
   const durationMs = mainRoot?.durationMs ?? null;
   const error = mainRoot?.error ?? null;
 
