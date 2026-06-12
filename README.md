@@ -92,7 +92,11 @@ Hub-assisted discovery details:
 
 `failures` is the primary triage command. It requires an `<outputDir>` and writes one
 self-contained folder per failed attempt (each failed retry included, no dedup) under
-`<outputDir>/run-<timestamp>/`. Each folder holds `failure.json` (title, step tree,
+`<outputDir>/run-<timestamp>/`. Inclusion is gated on each attempt's result `status` from
+`report.json` (`failed`, `timedOut`, `interrupted`; `skipped` honored by
+`--exclude-skipped`) — the same signal the HTML report uses — so attempts that aborted
+mid-step (error only on a child step, no root-step error) are still captured; without
+report metadata it falls back to scanning root-step failures. Each folder holds `failure.json` (title, step tree,
 slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
 reference at failure — ANSI escape codes stripped from step/issue messages),
 already-extracted screenshots, the Action-phase DOM at each failure anchor

@@ -122,6 +122,7 @@ export interface ReportTestSummary {
   annotations: Array<{ type: string; description?: string }>;
   tags: string[];
   results: Array<{
+    status?: string;
     attachments: Array<{ name: string; path?: string; contentType: string }>;
   }>;
 }

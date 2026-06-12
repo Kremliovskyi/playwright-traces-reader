@@ -59,6 +59,7 @@ describe('playwright-traces-reader sanity', () => {
       fixture.traces.failedPeer.sha1,
       fixture.traces.passed.sha1,
       fixture.traces.skipped.sha1,
+      fixture.traces.childOnlyFailure.sha1,
     ].sort());
   });
 
@@ -80,6 +81,16 @@ describe('playwright-traces-reader sanity', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]!.title).toBe(fixture.traces.failedLatest.rootTitle);
     expect(failures[0]!.error?.message).toContain('Synthetic failure');
+  });
+
+  test('getTopLevelFailures misses failures recorded only on child steps', async () => {
+    const ctx = await prepareTraceDir(fixture.traces.childOnlyFailure.tracePath);
+    const failures = await getTopLevelFailures(ctx);
+
+    // The root step has no error (test aborted mid-step), so root-only scanning
+    // finds nothing even though the attempt failed. This is why the `failures`
+    // command must rely on the report's result status instead.
+    expect(failures).toHaveLength(0);
   });
 
   test('getNetworkTraffic separates browser and api entries and resolves bodies', async () => {

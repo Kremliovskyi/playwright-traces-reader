@@ -35,10 +35,19 @@ import {
 /** Response bodies (text) larger than this are spilled into `network-error-bodies.ndjson`. */
 const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
 
+/**
+ * Playwright per-result statuses that count as a failure. `passed` and
+ * `skipped` are deliberately excluded; `skipped` is handled separately so the
+ * `--exclude-skipped` option can opt out of it.
+ */
+const FAILING_RESULT_STATUSES = new Set(['failed', 'timedOut', 'interrupted']);
+
 /** Per-trace metadata gathered from the HTML report's `report.json`. */
 interface FailureReportInfo {
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
   retryIndex: number;
+  /** Per-result status from `report.json` (failed/passed/timedOut/skipped/interrupted). */
+  status: string | null;
   /** Absolute path to Playwright's human-readable failure markdown, if present. */
   markdownPath: string | null;
 }
@@ -140,6 +149,7 @@ function buildFailureReportIndex(
           index.set(traceSha1, {
             outcome: test.outcome,
             retryIndex,
+            status: result.status ?? null,
             markdownPath: markdownPath && fs.existsSync(markdownPath) ? markdownPath : null,
           });
         }
@@ -304,25 +314,46 @@ export async function writeFailureDigests(
   const manifestEntries: FailureManifestEntry[] = [];
 
   for (const ctx of traces) {
-    const topFailures = await getTopLevelFailures(ctx);
-    if (topFailures.length === 0)
-      continue;
-
     const traceSha1 = path.basename(ctx.traceDir);
     const info = reportIndex?.get(traceSha1) ?? null;
-    const outcome = (info?.outcome ?? null) as TraceSummary['outcome'];
+    const status = info?.status ?? null;
 
-    if (options?.excludeSkipped) {
-      const isSkipped = traceMaps
-        ? outcome === 'skipped'
-        : topFailures.every(
-            f =>
-              f.annotations.some(a => a.type === 'skip') ||
-              f.error?.message?.includes('Test is skipped:'),
-          );
-      if (isSkipped)
-        continue;
+    // Decide whether this trace represents a failure worth digesting.
+    //
+    // Prefer the report's authoritative per-result status (from `report.json`) —
+    // the same signal the HTML report uses. Crucially, it also catches tests
+    // aborted mid-step whose error never propagated up to a root step. For
+    // example, a `waitForResponse` timeout inside a `toPass` block leaves the
+    // failing root step without an `after` event, so `getTopLevelFailures()`
+    // returns nothing and the failure would otherwise be silently dropped.
+    //
+    // Fall back to scanning root-level step errors only when no report metadata
+    // is available for this trace (e.g. a bare trace directory).
+    let shouldInclude: boolean;
+    if (status !== null) {
+      if (FAILING_RESULT_STATUSES.has(status))
+        shouldInclude = true;
+      else if (status === 'skipped')
+        shouldInclude = !options?.excludeSkipped;
+      else
+        shouldInclude = false;
+    } else {
+      const topFailures = await getTopLevelFailures(ctx);
+      if (topFailures.length === 0) {
+        shouldInclude = false;
+      } else if (options?.excludeSkipped) {
+        const isSkipped = topFailures.every(
+          f =>
+            f.annotations.some(a => a.type === 'skip') ||
+            f.error?.message?.includes('Test is skipped:'),
+        );
+        shouldInclude = !isSkipped;
+      } else {
+        shouldInclude = true;
+      }
     }
+    if (!shouldInclude)
+      continue;
 
     const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
     const retryIndex = info?.retryIndex ?? 0;

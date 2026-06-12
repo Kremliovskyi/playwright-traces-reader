@@ -62,15 +62,20 @@ describe('playwright-traces-reader CLI', () => {
       expect(payload.schemaVersion).toBe(1);
       expect(payload.command).toBe('failures');
       expect(payload).not.toHaveProperty('patterns');
-      // earlier retry, latest retry, peer failure, skipped = 4 attempts.
-      expect(payload.count).toBe(4);
-      expect(payload.failures).toHaveLength(4);
+      // earlier retry, latest retry, peer failure, skipped, child-only failure = 5 attempts.
+      expect(payload.count).toBe(5);
+      expect(payload.failures).toHaveLength(5);
 
       // Manifest is mirrored to runDir/index.json.
       const indexJson = JSON.parse(
         await fs.promises.readFile(path.join(payload.runDir, 'index.json'), 'utf-8'),
       ) as { count: number; failures: Array<{ folder: string }> };
-      expect(indexJson.count).toBe(4);
+      expect(indexJson.count).toBe(5);
+
+      // Regression guard: a failure recorded only on a child step (no root-step
+      // error) is still captured because inclusion is gated on the report's
+      // result status, not on `getTopLevelFailures()`.
+      expect(payload.failures.some(entry => entry.traceSha1 === fixture.traces.childOnlyFailure.sha1)).toBe(true);
 
       // Retry attempts produce retry0 and retry1 folders.
       const retryIndexes = payload.failures
@@ -142,7 +147,7 @@ describe('playwright-traces-reader CLI', () => {
         count: number;
         failures: Array<{ outcome: string | null; traceSha1: string }>;
       };
-      expect(payload.count).toBe(3);
+      expect(payload.count).toBe(4);
       expect(payload.failures.every(entry => entry.outcome !== 'skipped')).toBe(true);
       expect(payload.failures.some(entry => entry.traceSha1 === fixture.traces.failedLatest.sha1)).toBe(true);
       expect(payload.failures.some(entry => entry.traceSha1 === fixture.traces.failedPeer.sha1)).toBe(true);

@@ -184,6 +184,11 @@ Accepted inputs:
 Behavior:
 
 - passing tests are excluded
+- inclusion is gated on each attempt's `status` from `report.json` (`failed`,
+  `timedOut`, `interrupted` are included; `skipped` is controlled by
+  `--exclude-skipped`) — the same signal the HTML report uses, so attempts that
+  aborted mid-step (error only on a child step, no root-step error) are still
+  captured; without report metadata it falls back to scanning root-step failures
 - one folder is written per failed attempt, including each failed retry (no dedup)
 - folders are created under `<outputDir>/run-<timestamp>/`
 - each folder contains `failure.json` plus `screenshots/`, the Action-phase DOM at

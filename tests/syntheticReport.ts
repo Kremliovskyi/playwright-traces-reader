@@ -15,6 +15,14 @@ interface TraceSpec {
   endTime: number;
   zippedOnly?: boolean;
   skipped?: boolean;
+  /**
+   * When true, the failure error is recorded only on the child step and the
+   * root step's `after` event carries no error — mimicking a test aborted
+   * mid-step (e.g. a `waitForResponse` timeout) where the error never
+   * propagates to a root step. `getTopLevelFailures()` returns nothing for
+   * such a trace, so it can only be detected via the report's result status.
+   */
+  rootErrorMissing?: boolean;
 }
 
 export interface SyntheticTraceRef {
@@ -35,6 +43,7 @@ export interface SyntheticReportFixture {
     failedPeer: SyntheticTraceRef;
     passed: SyntheticTraceRef;
     skipped: SyntheticTraceRef;
+    childOnlyFailure: SyntheticTraceRef;
   };
 }
 
@@ -70,6 +79,9 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
   const error = spec.outcome === 'expected'
     ? undefined
     : { name: spec.skipped ? 'SkipError' : 'AssertionError', message: errorMessage };
+  // A trace aborted mid-step records the error on the child only; the root
+  // step's `after` event carries no error.
+  const rootError = spec.rootErrorMissing ? undefined : error;
 
   await fs.promises.mkdir(resourcesDir, { recursive: true });
   await fs.promises.writeFile(path.join(resourcesDir, screenshotSha1), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
@@ -123,7 +135,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
       type: 'after',
       callId: rootCallId,
       endTime: spec.endTime,
-      error,
+      error: rootError,
       annotations: spec.skipped ? [{ type: 'skip', description: 'synthetic skip' }] : [],
       attachments: [
         {
@@ -420,6 +432,16 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
       endTime: BASE_TIME + 3700,
       skipped: true,
     },
+    {
+      sha1: 'trace-fail-childonly',
+      testId: 'child-only-failure-test',
+      fullTitle: 'tests/synthetic.spec.ts:40 › Checkout › aborts mid-step with error on child only',
+      rootTitle: 'Child-only synthetic failure',
+      outcome: 'unexpected',
+      startTime: BASE_TIME + 3800,
+      endTime: BASE_TIME + 4300,
+      rootErrorMissing: true,
+    },
   ];
 
   const traceRefs = await Promise.all(specs.map(spec => writeTrace(dataDir, spec)));
@@ -428,6 +450,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
   const failedPeer = traceRefs[2]!;
   const passed = traceRefs[3]!;
   const skipped = traceRefs[4]!;
+  const childOnlyFailure = traceRefs[5]!;
 
   await fs.promises.writeFile(path.join(dataDir, 'notes.md'), 'ignore me\n');
   await fs.promises.writeFile(path.join(dataDir, 'preview.png'), 'not-a-trace\n');
@@ -449,7 +472,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
   }
 
   const reportJson = {
-    stats: { total: 5, expected: 1, unexpected: 3, flaky: 0, skipped: 1, ok: false },
+    stats: { total: 6, expected: 1, unexpected: 4, flaky: 0, skipped: 1, ok: false },
     files: [
       {
         fileId: 'synthetic.spec.ts',
@@ -471,6 +494,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
             annotations: representative.skipped ? [{ type: 'skip', description: 'synthetic skip' }] : [],
             tags: [],
             results: attempts.map(spec => ({
+              status: spec.outcome === 'expected' ? 'passed' : spec.skipped ? 'skipped' : 'failed',
               attachments: [
                 {
                   name: 'trace',
@@ -511,6 +535,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
       failedPeer,
       passed,
       skipped,
+      childOnlyFailure,
     },
   };
 }
