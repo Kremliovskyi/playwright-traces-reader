@@ -264,7 +264,13 @@ export async function findTraces(
         for (const att of result.attachments) {
           if (att.name === 'trace' && att.path) {
             const sha1 = path.basename(att.path, '.zip');
-            const tracePath = path.join(dataDir, sha1);
+            // Prefer the already-extracted trace directory; fall back to the
+            // raw .zip archive when it has not been extracted yet. prepareTraceDir
+            // knows how to extract a .zip, so digest works in both cases.
+            const extractedDir = path.join(dataDir, sha1);
+            const tracePath = fs.existsSync(extractedDir)
+              ? extractedDir
+              : path.join(dataDir, sha1 + '.zip');
 
             results.push({
               testTitle: fullTitle,
