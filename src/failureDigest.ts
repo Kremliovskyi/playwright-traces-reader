@@ -224,6 +224,7 @@ function buildNetworkErrorEntries(
         url: entry.url,
         status: entry.status,
         statusText: entry.statusText,
+        requestMimeType: entry.requestHeaders.find(header => header.name.toLowerCase() === 'content-type')?.value ?? '',
         mimeType: entry.mimeType,
         durationMs: entry.durationMs,
         startedDateTime: entry.startedDateTime,
@@ -245,7 +246,7 @@ function isBinaryBody(body: string | null): boolean {
 /**
  * Promotes triage network-error entries to NDJSON lines: assigns a global `seq`
  * (chronological by startedDateTime), computes body-spill metadata, and returns
- * both the inline lines and the spilled-body lines (>32 KB or binary). Aligned
+ * both the inline lines and the direction-tagged spilled-body lines (>32 KB). Aligned
  * with the `digest` command's `network.ndjson` body-spill contract.
  */
 function buildNetworkErrorLines(entries: NetworkErrorBaseJson[]): {
@@ -258,27 +259,48 @@ function buildNetworkErrorLines(entries: NetworkErrorBaseJson[]): {
 
   let seq = 1;
   for (const entry of sorted) {
-    const isBinary = isBinaryBody(entry.responseBody);
-    const bodySizeBytes = entry.responseBody !== null ? Buffer.byteLength(entry.responseBody, 'utf8') : 0;
-    const isLarge = !isBinary && entry.responseBody !== null && bodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+    const requestBodyIsBinary = isBinaryBody(entry.requestBody);
+    const requestBodySizeBytes = entry.requestBody !== null ? Buffer.byteLength(entry.requestBody, 'utf8') : 0;
+    const requestBodyIsLarge = !requestBodyIsBinary && entry.requestBody !== null && requestBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+    const responseBodyIsBinary = isBinaryBody(entry.responseBody);
+    const responseBodySizeBytes = entry.responseBody !== null ? Buffer.byteLength(entry.responseBody, 'utf8') : 0;
+    const responseBodyIsLarge = !responseBodyIsBinary && entry.responseBody !== null && responseBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
 
     lines.push({
       ...entry,
-      responseBody: isLarge ? null : entry.responseBody,
+      requestBody: requestBodyIsLarge ? null : entry.requestBody,
+      responseBody: responseBodyIsLarge ? null : entry.responseBody,
       seq,
-      bodySizeBytes,
-      isBinary,
-      isLarge,
-      bodyRef: isLarge ? seq : null,
+      requestBodySizeBytes,
+      requestBodyIsBinary,
+      requestBodyIsLarge,
+      requestBodyRef: requestBodyIsLarge ? seq : null,
+      responseBodySizeBytes,
+      responseBodyIsBinary,
+      responseBodyIsLarge,
+      responseBodyRef: responseBodyIsLarge ? seq : null,
     });
 
-    if (isLarge && entry.responseBody !== null) {
+    if (requestBodyIsLarge && entry.requestBody !== null) {
       bodies.push({
         seq,
+        direction: 'request',
+        url: entry.url,
+        mimeType: entry.requestMimeType,
+        encoding: 'utf8',
+        bodySizeBytes: requestBodySizeBytes,
+        body: entry.requestBody,
+      });
+    }
+
+    if (responseBodyIsLarge && entry.responseBody !== null) {
+      bodies.push({
+        seq,
+        direction: 'response',
         url: entry.url,
         mimeType: entry.mimeType,
         encoding: 'utf8',
-        bodySizeBytes,
+        bodySizeBytes: responseBodySizeBytes,
         body: entry.responseBody,
       });
     }

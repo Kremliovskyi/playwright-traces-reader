@@ -123,7 +123,7 @@ npx playwright-traces-reader vault-read <analysisFile>
 Text format outputs the raw markdown content directly. JSON format wraps it in an envelope:
 
 ```json
-{ "schemaVersion": 1, "command": "vault-read", "filename": "...", "content": "...", "savedPath": null }
+{ "schemaVersion": 2, "command": "vault-read", "filename": "...", "content": "...", "savedPath": null }
 ```
 
 Typical flow: discover a report, then read its analysis file if one exists.
@@ -155,7 +155,7 @@ npx playwright-traces-reader digest <tracePath> /path/to/output --report /path/t
 What it does:
 - Creates a self-contained output directory containing `digest.json` (the entry point step tree), `network.ndjson`, `console.ndjson`, and a `dom/` directory with self-contained Action-phase HTML snapshots.
 - Every step in `digest.json` links the sequence IDs of all network calls within its execution window.
-- Response bodies over 32 KB are spilled to `network-bodies.ndjson` with a `bodyRef` so you only load them if needed.
+- Request and response bodies over 32 KB are spilled to `network-bodies.ndjson`; use `(seq, direction)` to resolve the directional body reference and only load it when needed.
 
 Guidelines:
 - **Workspace Cleanup:** Choose any temporary output directory of your choice inside the workspace (e.g., `./tmp/digest-analysis`), perform your analysis by reading `digest.json` and its companion files directly, and then **delete the output directory** once you are done to keep the workspace clean. Make sure you do not delete any other files

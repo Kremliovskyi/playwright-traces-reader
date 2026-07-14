@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runCli } from '../src/cli';
+import type { NetworkErrorEntryJson, NetworkLineJson } from '../src/cli/json';
 import {
   cleanupSyntheticReportFixture,
   createSyntheticReportFixture,
@@ -59,7 +60,7 @@ describe('playwright-traces-reader CLI', () => {
         count: number;
         failures: Array<Record<string, unknown>>;
       };
-      expect(payload.schemaVersion).toBe(1);
+      expect(payload.schemaVersion).toBe(2);
       expect(payload.command).toBe('failures');
       expect(payload).not.toHaveProperty('patterns');
       // earlier retry, latest retry, peer failure, skipped, child-only failure = 5 attempts.
@@ -101,7 +102,7 @@ describe('playwright-traces-reader CLI', () => {
       const latestJson = JSON.parse(
         await fs.promises.readFile(path.join(latestDir, 'failure.json'), 'utf-8'),
       ) as {
-        files: { errorMarkdown: string | null; networkErrors: string | null; consoleErrors: string | null };
+        files: { errorMarkdown: string | null; networkErrors: string | null; networkErrorBodies: string | null; consoleErrors: string | null };
         domCount: number;
         screenshots: Array<{ dom: string | null; action: string | null }>;
       };
@@ -112,12 +113,28 @@ describe('playwright-traces-reader CLI', () => {
       const networkErrorLines = (await fs.promises.readFile(path.join(latestDir, 'network-errors.ndjson'), 'utf-8'))
         .trim()
         .split('\n')
-        .map(line => JSON.parse(line) as { seq: number; status: number; timingRelativeToFailures: unknown[] });
+        .map(line => JSON.parse(line) as NetworkErrorEntryJson);
       expect(networkErrorLines).toHaveLength(2);
       expect(networkErrorLines[0]!.seq).toBe(1);
       expect(networkErrorLines.every(line => line.status >= 400)).toBe(true);
       // Triage enrichment is preserved in NDJSON form.
       expect(Array.isArray(networkErrorLines[0]!.timingRelativeToFailures)).toBe(true);
+      const apiErrorLine = networkErrorLines.find(line => line.method === 'POST')!;
+      expect(apiErrorLine.requestBody).toBeNull();
+      expect(apiErrorLine.requestBodyIsLarge).toBe(true);
+      expect(apiErrorLine.requestBodySizeBytes).toBeGreaterThan(32 * 1024);
+      expect(apiErrorLine.requestBodyRef).toBe(apiErrorLine.seq);
+      expect(apiErrorLine.responseBody).toBeNull();
+      expect(apiErrorLine.responseBodyIsLarge).toBe(true);
+      expect(apiErrorLine.responseBodySizeBytes).toBeGreaterThan(32 * 1024);
+      expect(apiErrorLine.responseBodyRef).toBe(apiErrorLine.seq);
+      expect(latestJson.files.networkErrorBodies).toBe('network-error-bodies.ndjson');
+      const networkErrorBodies = (await fs.promises.readFile(path.join(latestDir, 'network-error-bodies.ndjson'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { seq: number; direction: 'request' | 'response'; bodySizeBytes: number; body: string });
+      expect(networkErrorBodies.filter(body => body.seq === apiErrorLine.seq).map(body => body.direction).sort()).toEqual(['request', 'response']);
+      expect(networkErrorBodies.every(body => body.bodySizeBytes > 32 * 1024)).toBe(true);
       // Console errors are NDJSON.
       expect(latestJson.files.consoleErrors).toBe('console-errors.ndjson');
       expect(fs.existsSync(path.join(latestDir, 'console-errors.ndjson'))).toBe(true);
@@ -187,7 +204,7 @@ describe('playwright-traces-reader CLI', () => {
         screenshotCount: number;
         consoleEntryCount: number;
       };
-      expect(manifest.schemaVersion).toBe(1);
+      expect(manifest.schemaVersion).toBe(2);
       expect(manifest.command).toBe('digest');
       expect(manifest.traceSha1).toBe(fixture.traces.failedLatest.sha1);
       expect(manifest.status).toBe('failed');
@@ -204,8 +221,8 @@ describe('playwright-traces-reader CLI', () => {
       ) as {
         command: string;
         traceSha1: string;
-        files: { network: string; console: string };
-        counts: { networkCalls: number };
+        files: { network: string; networkBodies: string | null; console: string };
+        counts: { networkCalls: number; networkBodiesSpilled: number };
         steps: Array<DigestNode>;
       };
       expect(digest.command).toBe('digest');
@@ -215,9 +232,23 @@ describe('playwright-traces-reader CLI', () => {
       const networkLines = (await fs.promises.readFile(path.join(folderDir, 'network.ndjson'), 'utf-8'))
         .trim()
         .split('\n')
-        .map(line => JSON.parse(line) as { seq: number; monotonicTime: number | null; startedDateTime: string });
+        .map(line => JSON.parse(line) as NetworkLineJson);
       expect(networkLines.length).toBe(digest.counts.networkCalls);
       expect(networkLines[0]!.seq).toBe(1);
+      const apiLine = networkLines.find(line => line.method === 'POST')!;
+      expect(apiLine.requestBody).toBeNull();
+      expect(apiLine.requestBodyIsLarge).toBe(true);
+      expect(apiLine.requestBodyRef).toBe(apiLine.seq);
+      expect(apiLine.responseBody).toBeNull();
+      expect(apiLine.responseBodyIsLarge).toBe(true);
+      expect(apiLine.responseBodyRef).toBe(apiLine.seq);
+      expect(digest.files.networkBodies).toBe('network-bodies.ndjson');
+      const networkBodies = (await fs.promises.readFile(path.join(folderDir, 'network-bodies.ndjson'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { seq: number; direction: 'request' | 'response' });
+      expect(networkBodies.filter(body => body.seq === apiLine.seq).map(body => body.direction).sort()).toEqual(['request', 'response']);
+      expect(digest.counts.networkBodiesSpilled).toBe(networkBodies.length);
 
       // Every network seq referenced by a step resolves in network.ndjson, and the
       // root step's links are a superset of its descendants' (ancestor nesting).
@@ -266,7 +297,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('summary');
     const summary = payload.summary as Record<string, unknown>;
     expect(summary.status).toBe('failed');
@@ -290,7 +321,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('summary');
     const summary = payload.summary as Record<string, unknown>;
     expect(summary.status).toBe('passed');
@@ -305,7 +336,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('slow-steps');
     expect(payload.count).toBe(1);
     const steps = payload.steps as Array<Record<string, unknown>>;
@@ -318,7 +349,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('steps');
     const steps = payload.steps as Array<Record<string, unknown>>;
     expect(steps.some(step => step.title === fixture.traces.failedLatest.rootTitle)).toBe(true);
@@ -338,7 +369,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('network');
     const entries = payload.entries as Array<{ source: string; responseBody: string | null; relatedAction: { callId: string } | null }>;
     expect(entries.length).toBeGreaterThan(0);
@@ -372,7 +403,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('request');
     const request = payload.request as { method: string; url: string; relatedAction: { callId: string } | null };
     expect(request.method).toBe('POST');
@@ -386,7 +417,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('console');
     const entries = payload.entries as Array<{ level: string; source: string }>;
     expect(entries.length).toBeGreaterThan(0);
@@ -399,7 +430,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('errors');
     const errors = payload.errors as Array<{ source: string; message: string }>;
     expect(errors.some(entry => entry.source === 'step')).toBe(true);
@@ -413,7 +444,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('attachments');
     const attachments = payload.attachments as Array<{ name: string; actionTitle: string | null }>;
     expect(attachments).toHaveLength(1);
@@ -430,7 +461,7 @@ describe('playwright-traces-reader CLI', () => {
       expect(result.exitCode).toBe(0);
 
       const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-      expect(payload.schemaVersion).toBe(1);
+      expect(payload.schemaVersion).toBe(2);
       expect(payload.command).toBe('attachment');
       const attachment = payload.attachment as { savedPath: string };
       expect(attachment.savedPath).toBe(outPath);
@@ -451,7 +482,7 @@ describe('playwright-traces-reader CLI', () => {
 
       // Stdout has lightweight confirmation
       const confirmation = JSON.parse(result.stdout) as Record<string, unknown>;
-      expect(confirmation.schemaVersion).toBe(1);
+      expect(confirmation.schemaVersion).toBe(2);
       expect(confirmation.command).toBe('dom');
       expect(confirmation.savedPath).toBe(outPath);
       expect(Array.isArray(confirmation.callIds)).toBe(true);
@@ -476,7 +507,7 @@ describe('playwright-traces-reader CLI', () => {
     expect(result.exitCode).toBe(0);
 
     const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(payload.schemaVersion).toBe(1);
+    expect(payload.schemaVersion).toBe(2);
     expect(payload.command).toBe('timeline');
     const entries = payload.entries as Array<{ type: string }>;
     expect(entries.some(entry => entry.type === 'step')).toBe(true);
@@ -499,7 +530,7 @@ describe('playwright-traces-reader CLI', () => {
       expect(result.exitCode).toBe(0);
 
       const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-      expect(payload.schemaVersion).toBe(1);
+      expect(payload.schemaVersion).toBe(2);
       expect(payload.command).toBe('screenshots');
       const screenshots = payload.screenshots as Array<{ savedPath: string }>;
       expect(screenshots.length).toBeGreaterThan(0);
@@ -517,7 +548,7 @@ describe('playwright-traces-reader CLI', () => {
 
       expect(result.exitCode).toBe(0);
       const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-      expect(payload.schemaVersion).toBe(1);
+      expect(payload.schemaVersion).toBe(2);
       expect(payload.command).toBe('init-skills');
       expect(payload.skillPath).toBe(path.join(tmpDir, '.github', 'skills', 'analyze-playwright-traces', 'SKILL.md'));
       expect(fs.existsSync(path.join(tmpDir, '.github', 'skills', 'analyze-playwright-traces', 'SKILL.md'))).toBe(true);

@@ -13,7 +13,7 @@ Every JSON response is a versioned envelope. Future integrations such as `playwr
 Current schema version:
 
 ```text
-1
+2
 ```
 
 ## Envelope Rules
@@ -35,7 +35,7 @@ Some commands also expose:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "init-skills",
   "skillPath": "/absolute/path/.github/skills/analyze-playwright-traces/SKILL.md"
 }
@@ -59,7 +59,7 @@ prints a compact manifest to stdout. The manifest is also mirrored to
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "failures",
   "outputDir": "/absolute/path/to/output",
   "runDir": "/absolute/path/to/output/run-2026-06-01T09-46-23-000Z",
@@ -117,11 +117,12 @@ Each `<runDir>/<folder>/` contains:
   folder self-contained — no follow-up `dom --near` call is needed for triage.
 - `network-errors.ndjson` — failing network requests (status >= 400), one record per
   line, chronological with a global `seq`, each carrying `timingRelativeToFailures`
-  (`before` / `during` / `after` / `unknown` per failure anchor). Response bodies over
-  32 KB are spilled (see below). Omitted when there are no failing requests. Aligned
+  (`before` / `during` / `after` / `unknown` per failure anchor). Request and response
+  bodies over 32 KB are spilled (see below). Omitted when there are no failing requests. Aligned
   with the `digest` command's `network.ndjson` format.
-- `network-error-bodies.ndjson` — spilled large response bodies (`{ seq, url, mimeType,
-  encoding, bodySizeBytes, body }`), back-linked by `seq`. Omitted when none spilled.
+- `network-error-bodies.ndjson` — spilled large request and response bodies
+  (`{ seq, direction, url, mimeType, encoding, bodySizeBytes, body }`), back-linked
+  by `(seq, direction)`. Omitted when none spilled.
 - `console-errors.ndjson` — browser/stderr console errors, one record per line,
   chronological. Omitted when none.
 - `error.md` — Playwright's human-readable error markdown, copied when present.
@@ -143,10 +144,11 @@ Each `<runDir>/<folder>/` contains:
   `consoleErrors`, `errorMarkdown`), each null when the file was not written
 
 Each `network-errors.ndjson` line carries the triage fields (`method`, `url`, `status`,
-`statusText`, `mimeType`, `durationMs`, `startedDateTime`, `requestBody`, `responseBody`,
-`relatedAction`, `timingRelativeToFailures`) plus `seq`, `bodySizeBytes`, `isBinary`,
-`isLarge`, and `bodyRef`. When `isLarge` is true, `responseBody` is null and `bodyRef`
-holds the `seq` to look up the body in `network-error-bodies.ndjson`.
+`statusText`, `requestMimeType`, `mimeType`, `durationMs`, `startedDateTime`, `requestBody`,
+`responseBody`, `relatedAction`, `timingRelativeToFailures`) plus `seq` and independent
+`requestBody*` / `responseBody*` size, binary, large, and reference fields. A spilled
+inline body is null; its reference is the `seq` used with its direction to find the
+record in `network-error-bodies.ndjson`.
 
 ### `digest`
 
@@ -157,7 +159,7 @@ failure points — and links every step to its artifacts.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "digest",
   "outputDir": "/absolute/path/to/output",
   "runDir": "/absolute/path/to/output/run-2026-06-08T14-03-38-855Z",
@@ -193,9 +195,11 @@ Each `<runDir>/<folder>/` contains:
 - `screenshots/<callId>.png|jpeg` — the screencast frame nearest the action's input
   moment, paired 1:1 with the DOM file by sanitized `callId`.
 - `network.ndjson` — every HTTP exchange, one record per line, chronological, with a
-  global `seq`. Small text/JSON bodies are inlined; bodies over 32 KB are spilled.
-- `network-bodies.ndjson` — spilled large response bodies (`{ seq, url, mimeType,
-  encoding, bodySizeBytes, body }`), back-linked by `seq`. Omitted when none.
+  global `seq`. Small text/JSON request and response bodies are inlined; bodies over
+  32 KB are spilled.
+- `network-bodies.ndjson` — spilled large request and response bodies
+  (`{ seq, direction, url, mimeType, encoding, bodySizeBytes, body }`), back-linked
+  by `(seq, direction)`. Omitted when none.
 - `console.ndjson` — console / page-error / stdout / stderr entries, chronological.
 
 `digest.json` fields:
@@ -229,24 +233,29 @@ Each `<runDir>/<folder>/` contains:
   "requestHeaders": [],
   "responseHeaders": [],
   "requestBody": "...",
+  "requestBodySizeBytes": 850,
+  "requestBodyIsBinary": false,
+  "requestBodyIsLarge": false,
+  "requestBodyRef": null,
   "responseBody": "...",
-  "bodySizeBytes": 1234,
-  "isBinary": false,
-  "isLarge": false,
-  "bodyRef": null,
+  "responseBodySizeBytes": 1234,
+  "responseBodyIsBinary": false,
+  "responseBodyIsLarge": false,
+  "responseBodyRef": null,
   "relatedActionCallId": null
 }
 ```
 
-When `isLarge` is true, `responseBody` is null and `bodyRef` holds the `seq` to look
-up the body in `network-bodies.ndjson`. Agents should read `bodySizeBytes` before
-fetching a spilled body.
+When a directional `*BodyIsLarge` field is true, that inline body is null and its
+`*BodyRef` holds the `seq`. Look up the body in `network-bodies.ndjson` using both
+the `seq` and `direction`. Agents should read the directional `*BodySizeBytes`
+before fetching a spilled body.
 
 ### `find-traces`
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "find-traces",
   "count": 2,
   "traces": [
@@ -290,7 +299,7 @@ Notes:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "summary",
   "summary": {
     "status": "failed",
@@ -340,7 +349,7 @@ Important `summary` fields:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "slow-steps",
   "count": 5,
   "steps": [
@@ -372,7 +381,7 @@ Important step fields:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "steps",
   "count": 3,
   "steps": [
@@ -398,7 +407,7 @@ Notes:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "network",
   "count": 4,
   "entries": [
@@ -437,7 +446,7 @@ Important network fields:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "request",
   "request": {
     "id": 12,
@@ -455,7 +464,7 @@ Payload field:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "console",
   "count": 3,
   "entries": [
@@ -485,7 +494,7 @@ Important console fields:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "errors",
   "count": 2,
   "errors": [
@@ -515,7 +524,7 @@ The `dom` command always writes full snapshots to a file (`--output` is required
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "dom",
   "count": 2,
   "savedPath": "/tmp/dom-snapshots.json",
@@ -534,7 +543,7 @@ The `dom` command always writes full snapshots to a file (`--output` is required
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "dom",
   "count": 2,
   "savedPath": "/tmp/dom-snapshots.json",
@@ -576,7 +585,7 @@ Each populated phase contains a `DomSnapshot` with fields such as:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "timeline",
   "count": 8,
   "entries": [
@@ -609,7 +618,7 @@ Each timeline entry includes:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "attachments",
   "count": 1,
   "attachments": [
@@ -639,7 +648,7 @@ Important attachment fields:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "attachment",
   "attachment": {
     "id": 1,
@@ -656,7 +665,7 @@ Payload field:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "screenshots",
   "count": 3,
   "screenshots": [
@@ -684,7 +693,7 @@ Each screenshot item includes:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "command": "vault-read",
   "filename": "my-report-name",
   "content": "# Analysis\n\nMarkdown content of the vault file...",

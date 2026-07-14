@@ -75,6 +75,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
   const responseSha1 = `${spec.sha1}-response.json`;
   const attachmentSha1 = `${spec.sha1}-attachment.txt`;
   const browserUrl = `https://synthetic.example/${spec.sha1}`;
+  const largePayload = 'x'.repeat(33 * 1024);
   const errorMessage = spec.skipped ? 'Test is skipped: synthetic skip' : `Synthetic failure for ${spec.sha1}`;
   const error = spec.outcome === 'expected'
     ? undefined
@@ -85,7 +86,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
 
   await fs.promises.mkdir(resourcesDir, { recursive: true });
   await fs.promises.writeFile(path.join(resourcesDir, screenshotSha1), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-  await fs.promises.writeFile(path.join(resourcesDir, responseSha1), JSON.stringify({ ok: spec.outcome === 'expected', trace: spec.sha1 }));
+  await fs.promises.writeFile(path.join(resourcesDir, responseSha1), JSON.stringify({ ok: spec.outcome === 'expected', trace: spec.sha1, payload: largePayload }));
   await fs.promises.writeFile(path.join(resourcesDir, attachmentSha1), `attachment for ${spec.sha1}\n`);
 
   const testTraceEvents = [
@@ -333,7 +334,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
           headers: [{ name: 'content-type', value: 'application/json' }],
           postData: {
             mimeType: 'application/json',
-            text: JSON.stringify({ action: 'submit', trace: spec.sha1 }),
+            text: JSON.stringify({ action: 'submit', trace: spec.sha1, payload: largePayload }),
           },
         },
         response: {

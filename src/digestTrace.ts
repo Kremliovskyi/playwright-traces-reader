@@ -27,7 +27,7 @@ import {
   type NetworkLineJson,
 } from './cli/json';
 
-/** Bodies (text) larger than this are spilled into `network-bodies.ndjson`. */
+/** Request or response bodies (text) larger than this are spilled into `network-bodies.ndjson`. */
 const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
 
 // eslint-disable-next-line no-control-regex
@@ -107,10 +107,14 @@ function buildNetworkLines(entries: NetworkEntry[]): {
   for (const entry of sorted) {
     seqByEntry.set(entry, seq);
 
+    const requestBody = entry.requestBody;
+    const requestBodyIsBinary = isBinaryBody(requestBody);
+    const requestBodySizeBytes = requestBody !== null ? Buffer.byteLength(requestBody, 'utf8') : 0;
+    const requestBodyIsLarge = !requestBodyIsBinary && requestBody !== null && requestBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
     const responseBody = entry.responseBody;
-    const isBinary = isBinaryBody(responseBody);
-    const bodySizeBytes = responseBody !== null ? Buffer.byteLength(responseBody, 'utf8') : 0;
-    const isLarge = !isBinary && responseBody !== null && bodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+    const responseBodyIsBinary = isBinaryBody(responseBody);
+    const responseBodySizeBytes = responseBody !== null ? Buffer.byteLength(responseBody, 'utf8') : 0;
+    const responseBodyIsLarge = !responseBodyIsBinary && responseBody !== null && responseBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
 
     const line: NetworkLineJson = {
       seq,
@@ -125,23 +129,41 @@ function buildNetworkLines(entries: NetworkEntry[]): {
       durationMs: entry.durationMs,
       requestHeaders: entry.requestHeaders,
       responseHeaders: entry.responseHeaders,
-      requestBody: entry.requestBody,
-      responseBody: isLarge ? null : responseBody,
-      bodySizeBytes,
-      isBinary,
-      isLarge,
-      bodyRef: isLarge ? seq : null,
+      requestBody: requestBodyIsLarge ? null : requestBody,
+      requestBodySizeBytes,
+      requestBodyIsBinary,
+      requestBodyIsLarge,
+      requestBodyRef: requestBodyIsLarge ? seq : null,
+      responseBody: responseBodyIsLarge ? null : responseBody,
+      responseBodySizeBytes,
+      responseBodyIsBinary,
+      responseBodyIsLarge,
+      responseBodyRef: responseBodyIsLarge ? seq : null,
       relatedActionCallId: entry.relatedAction?.callId ?? null,
     };
     lines.push(line);
 
-    if (isLarge && responseBody !== null) {
+    if (requestBodyIsLarge && requestBody !== null) {
+      const requestContentType = entry.requestHeaders.find(header => header.name.toLowerCase() === 'content-type')?.value ?? '';
       bodies.push({
         seq,
+        direction: 'request',
+        url: entry.url,
+        mimeType: requestContentType,
+        encoding: 'utf8',
+        bodySizeBytes: requestBodySizeBytes,
+        body: requestBody,
+      });
+    }
+
+    if (responseBodyIsLarge && responseBody !== null) {
+      bodies.push({
+        seq,
+        direction: 'response',
         url: entry.url,
         mimeType: entry.mimeType,
         encoding: 'utf8',
-        bodySizeBytes,
+        bodySizeBytes: responseBodySizeBytes,
         body: responseBody,
       });
     }

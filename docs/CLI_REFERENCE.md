@@ -193,8 +193,9 @@ Behavior:
 - folders are created under `<outputDir>/run-<timestamp>/`
 - each folder contains `failure.json` plus `screenshots/`, the Action-phase DOM at
   each failure anchor (`dom/<callId>.html`, referenced from `failure.json`),
-  `network-errors.ndjson` (one record per line, per-anchor timing, 32 KB body spill to
-  `network-error-bodies.ndjson`), `console-errors.ndjson`, and `error.md` when available
+  `network-errors.ndjson` (one record per line, per-anchor timing, request and response
+  bodies over 32 KB spilled to `network-error-bodies.ndjson` with a `direction`),
+  `console-errors.ndjson`, and `error.md` when available
   (its `# Instructions` preamble is stripped, diagnostic sections kept verbatim)
 - the NDJSON companions and body-spill rule are aligned with the `digest` command
 - the manifest is printed to stdout and mirrored to `<runDir>/index.json`
@@ -308,8 +309,9 @@ Behavior:
   paired 1:1
 - every step links the seq ids of all network calls in its time window; a parent's
   links are a superset of its descendants'
-- large response bodies (> 32 KB) are spilled to `network-bodies.ndjson`; each line
-  carries `bodySizeBytes` so consumers can decide before reading
+- large request and response bodies (> 32 KB) are spilled to `network-bodies.ndjson`;
+  each line carries `direction` and `bodySizeBytes`, and is keyed by `(seq, direction)`
+  so consumers can decide before reading
 - `--report` improves outcome/retry resolution by loading report metadata explicitly
 
 Examples:

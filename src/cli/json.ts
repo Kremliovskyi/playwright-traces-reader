@@ -16,7 +16,7 @@ import type {
 } from '../index';
 import type { HubReportDescriptor } from './helpers';
 
-export const CLI_JSON_SCHEMA_VERSION = 1 as const;
+export const CLI_JSON_SCHEMA_VERSION = 2 as const;
 
 /** Screencast frames captured around a single failure anchor, plus the failure-moment DOM. */
 export interface FailureScreenshotSetJson {
@@ -46,6 +46,7 @@ export interface NetworkErrorBaseJson {
   url: string;
   status: number;
   statusText: string;
+  requestMimeType: string;
   mimeType: string;
   durationMs: number;
   startedDateTime: string;
@@ -57,21 +58,26 @@ export interface NetworkErrorBaseJson {
 
 /**
  * One line in a failure folder's `network-errors.ndjson`. Carries the triage
- * enrichment plus a global `seq` and body-spill metadata aligned with the
- * `digest` command's `network.ndjson`. When `isLarge` is true, `responseBody` is
- * null and the body lives in `network-error-bodies.ndjson` under the same `seq`.
+ * enrichment plus a global `seq` and directional body-spill metadata aligned
+ * with the `digest` command's `network.ndjson`. Spilled request and response
+ * bodies live in `network-error-bodies.ndjson`, keyed by `(seq, direction)`.
  */
 export interface NetworkErrorEntryJson extends NetworkErrorBaseJson {
   seq: number;
-  bodySizeBytes: number;
-  isBinary: boolean;
-  isLarge: boolean;
-  bodyRef: number | null;
+  requestBodySizeBytes: number;
+  requestBodyIsBinary: boolean;
+  requestBodyIsLarge: boolean;
+  requestBodyRef: number | null;
+  responseBodySizeBytes: number;
+  responseBodyIsBinary: boolean;
+  responseBodyIsLarge: boolean;
+  responseBodyRef: number | null;
 }
 
 /** One line in a failure folder's `network-error-bodies.ndjson` (a spilled large body). */
 export interface NetworkErrorBodyLineJson {
   seq: number;
+  direction: 'request' | 'response';
   url: string;
   mimeType: string;
   encoding: 'utf8';
@@ -174,21 +180,29 @@ export interface NetworkLineJson {
   durationMs: number;
   requestHeaders: Array<{ name: string; value: string }>;
   responseHeaders: Array<{ name: string; value: string }>;
+  /** Inline request body, or null when spilled (see `requestBodyRef`) or absent. */
   requestBody: string | null;
-  /** Inline response body, or null when spilled (see `bodyRef`) or absent. */
+  requestBodySizeBytes: number;
+  requestBodyIsBinary: boolean;
+  /** True when the request body was spilled to `network-bodies.ndjson`. */
+  requestBodyIsLarge: boolean;
+  /** Seq id to look up the spilled request body by `(seq, direction)` in `network-bodies.ndjson`. */
+  requestBodyRef: number | null;
+  /** Inline response body, or null when spilled (see `responseBodyRef`) or absent. */
   responseBody: string | null;
-  bodySizeBytes: number;
-  isBinary: boolean;
+  responseBodySizeBytes: number;
+  responseBodyIsBinary: boolean;
   /** True when the response body was spilled to `network-bodies.ndjson`. */
-  isLarge: boolean;
-  /** Seq id to look up the spilled body in `network-bodies.ndjson`, or null. */
-  bodyRef: number | null;
+  responseBodyIsLarge: boolean;
+  /** Seq id to look up the spilled response body by `(seq, direction)` in `network-bodies.ndjson`. */
+  responseBodyRef: number | null;
   relatedActionCallId: string | null;
 }
 
 /** One line in a digest's `network-bodies.ndjson` (a spilled large body). */
 export interface NetworkBodyLineJson {
   seq: number;
+  direction: 'request' | 'response';
   url: string;
   mimeType: string;
   encoding: 'utf8';
