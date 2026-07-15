@@ -57,18 +57,46 @@ PWTR_COMPAT_REPORT=./tmp/compatibility-1.59.0/playwright-report \
 
 The producer uses public `@playwright/test` APIs in an isolated temporary npm project. It does not add Playwright to this package's runtime dependencies or lockfile.
 
-## Updating the fixture
+## Upgrading the production baseline
 
-Regenerate the committed baseline only when the production Playwright version, trace schema, or producer scenarios intentionally change:
+The production baseline is the exact Playwright version in `tests/compatibility/versions.json` and the matching committed report in `tests/fixtures/real-reports/`. It is a deterministic PR fixture, not the maximum Playwright version the reader supports. The scheduled `latest` and `next` lanes test newer versions independently.
+
+Use an exact published version, not a moving tag such as `latest`. For example, to upgrade from 1.59.0 to 1.61.1, first generate the candidate report and fixture:
 
 ```bash
 npm run compatibility:generate -- \
-  --playwright-version 1.59.0 \
-  --output ./tmp/compatibility-1.59.0 \
-  --archive ./tests/fixtures/real-reports/playwright-1.59.0.zip
-npm run test:real-fixture
+  --playwright-version 1.61.1 \
+  --output ./tmp/compatibility-1.61.1 \
+  --archive ./tests/fixtures/real-reports/playwright-1.61.1.zip
 ```
 
-Review `provenance.json` inside the archive. It records the resolved Playwright version, trace schema, producer revision, scenario names, and SHA-256 checksums for every parser input.
+Validate the generated report before changing any baseline references:
+
+```bash
+PWTR_COMPAT_REPORT=./tmp/compatibility-1.61.1/playwright-report \
+  npm run compatibility:run
+```
+
+When the candidate passes, update these baseline references together:
+
+1. Set `production` to `1.61.1` in `tests/compatibility/versions.json`.
+2. Change the fixture filename and expected `resolvedPlaywrightVersion` in `tests/realReportCompatibility.test.ts`.
+3. Replace the baseline version and fixture filename in `docs/TESTING.md` and `docs/COMPATIBILITY.md`.
+
+Then run the complete suite:
+
+```bash
+npm run test:all
+```
+
+After it passes, delete the old fixture and commit the new fixture with the code and documentation changes:
+
+```bash
+rm ./tests/fixtures/real-reports/playwright-1.59.0.zip
+```
+
+Review `provenance.json` inside the new archive. It records the resolved Playwright version, trace schema, producer revision, scenario names, and SHA-256 checksums for every parser input.
+
+Do not raise `MAX_SUPPORTED_TRACE_VERSION` merely because the Playwright package version changed. Change that limit only after a newer trace schema has been investigated, supported by the parser, and covered by compatibility tests. Playwright 1.61.1 still produces trace schema 8, so upgrading to it does not require changing the schema limit.
 
 Do not automatically commit weekly canary reports. They are uploaded only when a compatibility lane fails.
