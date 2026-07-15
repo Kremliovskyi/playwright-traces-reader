@@ -1,0 +1,65 @@
+name: Trace compatibility
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trace-compatibility
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Playwright ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [production, latest, next]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Resolve requested version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ matrix.lane }}" == "production" ]]; then
+            VERSION=$(node -p "require('./tests/compatibility/versions.json').production")
+          else
+            VERSION="${{ matrix.lane }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Generate real report
+        run: >-
+          npm run compatibility:generate --
+          --playwright-version "${{ steps.version.outputs.version }}"
+          --output "$RUNNER_TEMP/pwtr-${{ matrix.lane }}"
+      - name: Run command matrix
+        env:
+          PWTR_COMPAT_REPORT: ${{ runner.temp }}/pwtr-${{ matrix.lane }}/playwright-report
+        run: npm run compatibility:run
+      - name: Publish resolved version
+        if: always()
+        shell: bash
+        run: |
+          PROVENANCE="$RUNNER_TEMP/pwtr-${{ matrix.lane }}/provenance.json"
+          if [[ -f "$PROVENANCE" ]]; then
+            node -e "const p=require(process.argv[1]); console.log('Resolved Playwright:',p.resolvedPlaywrightVersion); console.log('Trace schema:',p.traceVersions.join(', '));" "$PROVENANCE"
+          fi
+      - name: Upload failing report and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-compatibility-${{ matrix.lane }}
+          path: ${{ runner.temp }}/pwtr-${{ matrix.lane }}
+          if-no-files-found: warn
+          retention-days: 14

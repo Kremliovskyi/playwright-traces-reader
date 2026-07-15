@@ -61,7 +61,7 @@ function snapshotTree(label: string, targetCallId?: string): unknown[] {
       'body',
       {},
       ['div', { id: 'app' }, label],
-      ['button', targetCallId ? { id: 'submit', __playwright_target__: targetCallId } : { id: 'submit' }, 'Submit'],
+      ['button', targetCallId !== undefined ? { id: 'submit', __playwright_target__: targetCallId } : { id: 'submit' }, 'Submit'],
     ],
   ];
 }
@@ -149,7 +149,18 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
   ];
 
   const traceEvents = [
-    { type: 'context-options', title: spec.fullTitle },
+    {
+      type: 'context-options',
+      version: 8,
+      origin: 'testRunner',
+      browserName: 'chromium',
+      platform: 'darwin',
+      playwrightVersion: '1.59.0',
+      wallTime: spec.startTime,
+      monotonicTime: spec.startTime,
+      title: spec.fullTitle,
+      options: {},
+    },
     {
       type: 'before',
       callId: rootCallId,
@@ -185,7 +196,7 @@ async function writeTrace(dataDir: string, spec: TraceSpec): Promise<SyntheticTr
         pageId: 'page@1',
         frameId: 'frame@1',
         frameUrl: browserUrl,
-        html: snapshotTree('Submitting', rootCallId),
+        html: snapshotTree('Submitting', ''),
         viewport: { width: 1280, height: 720 },
         timestamp: spec.startTime + 140,
         wallTime: spec.startTime + 140,
@@ -417,7 +428,7 @@ export async function createSyntheticReportFixture(): Promise<SyntheticReportFix
     {
       sha1: 'trace-pass',
       testId: 'passing-test',
-      fullTitle: 'tests/synthetic.spec.ts:20 › Checkout › allows successful completion',
+      fullTitle: 'tests/synthetic.spec.ts:20 › Checkout › allows successful completion [literal](v2)',
       rootTitle: 'Synthetic passing flow',
       outcome: 'expected',
       startTime: BASE_TIME + 2600,

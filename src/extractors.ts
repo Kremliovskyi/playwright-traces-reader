@@ -792,8 +792,9 @@ export async function extractFailureScreenshots(
  * the current snapshot's index) within this frame's history, and `nodeIdx` is the
  * index in the post-order DFS traversal of that historical snapshot.
  *
- * `targetElement` is the value of the `__playwright_target__` attribute on
- * the interacted element (the `callId` of the action that targeted it), if any.
+ * `targetElement` is the action callId for an element marked with
+ * `__playwright_target__`. Older traces store the callId as the attribute value;
+ * newer traces use an empty value and inherit the snapshot's callId.
  */
 export interface DomSnapshot {
   callId: string;
@@ -1180,7 +1181,7 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
     const targetElement = findPlaywrightTarget(rec.html, {
       ...ctx,
       stack: new Set<string>([rec.frameId]),
-    });
+    }, rec.callId);
 
     const domSnapshot: DomSnapshot = {
       callId: rec.callId,
@@ -1256,12 +1257,13 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
  * elements (matched by `src="/snapshot/<frameId>"`) so a target living inside a
  * child frame is still found. Cycles and runaway depth are guarded via `ctx.stack`.
  */
-function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext): string | null {
+function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext, currentCallId?: string): string | null {
   if (!Array.isArray(node) || node.length < 2) return null;
   const attrs = node[1];
   if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
-    const target = (attrs as Record<string, string>)['__playwright_target__'];
-    if (target) return target;
+    const attributes = attrs as Record<string, string>;
+    if (Object.prototype.hasOwnProperty.call(attributes, '__playwright_target__'))
+      return attributes['__playwright_target__'] || currentCallId || null;
 
     // Descend into child frames so targets inside iframes are still found.
     if (ctx && typeof node[0] === 'string') {
@@ -1273,7 +1275,7 @@ function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext): string |
           if (entry) {
             ctx.stack.add(childFrameId);
             try {
-              const found = findPlaywrightTarget(entry.html, ctx);
+              const found = findPlaywrightTarget(entry.html, ctx, currentCallId);
               if (found) return found;
             } finally {
               ctx.stack.delete(childFrameId);
@@ -1286,7 +1288,7 @@ function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext): string |
   for (let i = 2; i < node.length; i++) {
     const child = node[i];
     if (Array.isArray(child)) {
-      const found = findPlaywrightTarget(child as SnapshotNode[], ctx);
+      const found = findPlaywrightTarget(child as SnapshotNode[], ctx, currentCallId);
       if (found) return found;
     }
   }

@@ -5,6 +5,8 @@ Parse [Playwright](https://playwright.dev) trace files into structured data — 
 See [CLI_ARCHITECTURE.md](docs/CLI_ARCHITECTURE.md) for the future CLI and report-hub architecture overview.
 See [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the detailed CLI command reference.
 See [CLI_JSON_CONTRACTS.md](docs/CLI_JSON_CONTRACTS.md) for the versioned JSON output contracts used by the CLI.
+See [TESTING.md](docs/TESTING.md) for deterministic synthetic, real-fixture, and scheduled compatibility testing.
+See [COMPATIBILITY.md](docs/COMPATIBILITY.md) for the supported trace schema and Playwright version policy.
 
 ## Features
 

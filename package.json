@@ -1,6 +1,6 @@
 {
   "name": "@andrii_kremlovskyi/playwright-traces-reader",
-  "version": "2.7.0",
+  "version": "3.0.0",
   "description": "Parse Playwright trace files into structured data for AI agents and tooling",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,7 +14,12 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "test": "jest"
+    "test": "npm run test:unit",
+    "test:unit": "jest tests/cli.test.ts tests/hubCli.test.ts tests/parseTrace.test.ts tests/sanity.test.ts",
+    "test:real-fixture": "npm run build && jest --runInBand tests/realReportCompatibility.test.ts",
+    "test:all": "npm run test:unit && npm run test:real-fixture",
+    "compatibility:generate": "tsx scripts/generateCompatibilityReport.ts",
+    "compatibility:run": "npm run build && jest --runInBand tests/realReportCompatibility.test.ts"
   },
   "keywords": [
     "playwright",
@@ -58,6 +63,7 @@
           "tsconfig": {
             "module": "Node16",
             "moduleResolution": "Node16",
+            "isolatedModules": true,
             "esModuleInterop": true,
             "types": [
               "node",

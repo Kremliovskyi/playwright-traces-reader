@@ -291,6 +291,44 @@ describe('playwright-traces-reader CLI', () => {
     }
   });
 
+  test('find-traces returns every retry from immutable archive paths', async () => {
+    const result = await execCli(['find-traces', fixture.rootDir, 'retries keep latest failure']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+
+    const payload = JSON.parse(result.stdout) as {
+      schemaVersion: number;
+      command: string;
+      count: number;
+      traces: Array<{ outcome: string; resultIndex: number; traceSha1: string; tracePath: string }>;
+    };
+    expect(payload.schemaVersion).toBe(2);
+    expect(payload.command).toBe('find-traces');
+    expect(payload.count).toBe(2);
+    expect(payload.traces.map(trace => trace.resultIndex)).toEqual([0, 1]);
+    expect(payload.traces.map(trace => trace.traceSha1)).toEqual([
+      fixture.traces.failedEarlierZip.sha1,
+      fixture.traces.failedLatest.sha1,
+    ]);
+    expect(payload.traces.every(trace => trace.outcome === 'unexpected')).toBe(true);
+    expect(payload.traces.every(trace => trace.tracePath.endsWith('.zip'))).toBe(true);
+  });
+
+  test('find-traces treats special characters literally and filters outcomes', async () => {
+    const matching = await execCli(['find-traces', fixture.rootDir, '[literal](v2)', '--outcome', 'expected']);
+    const excluded = await execCli(['find-traces', fixture.rootDir, '[literal](v2)', '--outcome', 'unexpected']);
+
+    expect(matching.exitCode).toBe(0);
+    expect(excluded.exitCode).toBe(0);
+
+    const matchingPayload = JSON.parse(matching.stdout) as { count: number; traces: Array<{ traceSha1: string }> };
+    const excludedPayload = JSON.parse(excluded.stdout) as { count: number };
+    expect(matchingPayload.count).toBe(1);
+    expect(matchingPayload.traces[0]!.traceSha1).toBe(fixture.traces.passed.sha1);
+    expect(excludedPayload.count).toBe(0);
+  });
+
   test('summary command returns a failed trace summary as JSON', async () => {
     const result = await execCli(['summary', fixture.traces.failedLatest.tracePath, '--report', fixture.rootDir]);
 

@@ -1,10 +1,50 @@
 import * as fs from 'fs';
+import * as crypto from 'crypto';
+import * as os from 'os';
 import * as path from 'path';
-import * as readline from 'readline';
 import AdmZip from 'adm-zip';
+import { assertSupportedTraceVersion } from './traceCompatibility';
+
+export { NdjsonParseError, readNdjson } from './ndjson';
 
 export interface TraceContext {
   traceDir: string;
+  /** Original directory or ZIP supplied by the caller. */
+  sourcePath?: string;
+  /** Report data directory inferred from the original source location. */
+  reportDataDir?: string;
+}
+
+async function extractTraceZip(tracePath: string): Promise<string> {
+  const archive = await fs.promises.readFile(tracePath);
+  const digest = crypto.createHash('sha256').update(archive).digest('hex');
+  const traceName = path.basename(tracePath, '.zip');
+  const cacheRoot = path.join(os.tmpdir(), 'playwright-traces-reader', 'trace-cache');
+  const finalRoot = path.join(cacheRoot, digest);
+  const finalTraceDir = path.join(finalRoot, traceName);
+
+  if (fs.existsSync(finalTraceDir))
+    return finalTraceDir;
+
+  await fs.promises.mkdir(cacheRoot, { recursive: true });
+  const temporaryRoot = await fs.promises.mkdtemp(path.join(cacheRoot, `${digest}-`));
+  const temporaryTraceDir = path.join(temporaryRoot, traceName);
+
+  try {
+    await fs.promises.mkdir(temporaryTraceDir);
+    new AdmZip(archive).extractAllTo(temporaryTraceDir, true);
+    try {
+      await fs.promises.rename(temporaryRoot, finalRoot);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST' && code !== 'ENOTEMPTY')
+        throw error;
+    }
+  } finally {
+    await fs.promises.rm(temporaryRoot, { recursive: true, force: true });
+  }
+
+  return finalTraceDir;
 }
 
 /**
@@ -12,45 +52,28 @@ export interface TraceContext {
  * If a .zip file is provided, it extracts it to a temporary directory.
  */
 export async function prepareTraceDir(tracePath: string): Promise<TraceContext> {
-  const stat = await fs.promises.stat(tracePath);
+  const sourcePath = path.resolve(tracePath);
+  const stat = await fs.promises.stat(sourcePath);
   if (stat.isDirectory()) {
-    return { traceDir: tracePath };
+    await assertSupportedTraceVersion(sourcePath);
+    return {
+      traceDir: sourcePath,
+      sourcePath,
+      reportDataDir: path.dirname(sourcePath),
+    };
   }
   
-  if (tracePath.endsWith('.zip')) {
-    const outDir = tracePath.replace(/\.zip$/, '');
-    if (!fs.existsSync(outDir)) {
-      const zip = new AdmZip(tracePath);
-      zip.extractAllTo(outDir, true);
-    }
-    return { traceDir: outDir };
+  if (sourcePath.endsWith('.zip')) {
+    const traceDir = await extractTraceZip(sourcePath);
+    await assertSupportedTraceVersion(traceDir);
+    return {
+      traceDir,
+      sourcePath,
+      reportDataDir: path.dirname(sourcePath),
+    };
   }
 
-  throw new Error(`Invalid trace path: ${tracePath}. Must be a directory or .zip file.`);
-}
-
-/**
- * Reads a Newline Delimited JSON (NDJSON) file line by line and yields parsed objects.
- */
-export async function* readNdjson<T = any>(filePath: string): AsyncGenerator<T> {
-  if (!fs.existsSync(filePath)) {
-    return;
-  }
-  const fileStream = fs.createReadStream(filePath);
-  const rl = readline.createInterface({
-    input: fileStream,
-    crlfDelay: Infinity
-  });
-
-  for await (const line of rl) {
-    if (line.trim()) {
-      try {
-        yield JSON.parse(line) as T;
-      } catch (e) {
-        // Ignore malformed lines
-      }
-    }
-  }
+  throw new Error(`Invalid trace path: ${sourcePath}. Must be a directory or .zip file.`);
 }
 
 /**
@@ -79,7 +102,7 @@ export async function getResourceBuffer(traceContext: TraceContext, sha1: string
 export async function listTraces(reportDataDir: string): Promise<TraceContext[]> {
   const entries = await fs.promises.readdir(reportDataDir, { withFileTypes: true });
 
-  const tracePaths: string[] = [];
+  const tracePathsByName = new Map<string, string>();
 
   for (const entry of entries) {
     const fullPath = path.join(reportDataDir, entry.name);
@@ -91,20 +114,16 @@ export async function listTraces(reportDataDir: string): Promise<TraceContext[]>
     if (isDir) {
       // A directory is a trace if it contains a test.trace file
       const testTracePath = path.join(fullPath, 'test.trace');
-      if (fs.existsSync(testTracePath)) {
-        tracePaths.push(fullPath);
-      }
+      if (fs.existsSync(testTracePath) && !tracePathsByName.has(entry.name))
+        tracePathsByName.set(entry.name, fullPath);
     } else if (entry.isFile() && entry.name.endsWith('.zip')) {
-      const extractedDir = fullPath.replace(/\.zip$/, '');
-      // Only include if the extracted form is not already represented as a directory entry
-      if (!fs.existsSync(extractedDir)) {
-        tracePaths.push(fullPath);
-      }
-      // If the directory already exists (previously extracted), it was already added above
+      // The archive is authoritative when a stale extracted sibling also exists.
+      tracePathsByName.set(entry.name.slice(0, -4), fullPath);
     }
   }
 
-  return Promise.all(tracePaths.map(p => prepareTraceDir(p)));
+  const tracePaths = [...tracePathsByName.values()].sort();
+  return Promise.all(tracePaths.map(tracePath => prepareTraceDir(tracePath)));
 }
 
 // ---------- Report metadata ----------
@@ -264,13 +283,13 @@ export async function findTraces(
         for (const att of result.attachments) {
           if (att.name === 'trace' && att.path) {
             const sha1 = path.basename(att.path, '.zip');
-            // Prefer the already-extracted trace directory; fall back to the
-            // raw .zip archive when it has not been extracted yet. prepareTraceDir
-            // knows how to extract a .zip, so digest works in both cases.
+            // Prefer the immutable archive when both it and a potentially stale
+            // extracted sibling exist. prepareTraceDir extracts archives into a
+            // content-addressed cache, so callers get fresh bytes without
+            // mutating report data.
+            const archivePath = path.join(dataDir, sha1 + '.zip');
             const extractedDir = path.join(dataDir, sha1);
-            const tracePath = fs.existsSync(extractedDir)
-              ? extractedDir
-              : path.join(dataDir, sha1 + '.zip');
+            const tracePath = fs.existsSync(archivePath) ? archivePath : extractedDir;
 
             results.push({
               testTitle: fullTitle,

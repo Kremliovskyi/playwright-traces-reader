@@ -179,6 +179,7 @@ describe('playwright-traces-reader sanity', () => {
     expect(snapshots[0]!.action?.html).toContain('Submitting');
     expect(snapshots[0]!.after?.html).toContain('Submission failed');
     expect(snapshots[0]!.before?.targetElement).toBe(fixture.traces.failedLatest.rootCallId);
+    expect(snapshots[0]!.action?.targetElement).toBe(fixture.traces.failedLatest.rootCallId);
   });
 
   test('getDomSnapshots options filter by phase and location', async () => {

@@ -111,7 +111,7 @@ export async function loadReportMetadataForTrace(
     return getReportMetadata(path.resolve(explicitReportPath));
   }
 
-  return getReportMetadata(path.dirname(traceContext.traceDir));
+  return getReportMetadata(traceContext.reportDataDir ?? path.dirname(traceContext.sourcePath ?? traceContext.traceDir));
 }
 
 export function parsePositiveInteger(value: string): number {
@@ -145,6 +145,15 @@ export function normalizeHubBaseUrl(baseUrl?: string): string {
   return (baseUrl || DEFAULT_REPORTS_HUB_BASE_URL).replace(/\/$/, '');
 }
 
+function isFetchFailure(error: unknown): boolean {
+  return error instanceof TypeError || (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    error.name === 'TypeError'
+  );
+}
+
 export async function searchReportsViaHub(options: SearchReportsHubOptions): Promise<SearchReportsHubResponse> {
   const params = new URLSearchParams();
 
@@ -163,7 +172,7 @@ export async function searchReportsViaHub(options: SearchReportsHubOptions): Pro
   try {
     return await requestHubJson<SearchReportsHubResponse>(url);
   } catch (error) {
-    if (error instanceof TypeError) {
+    if (isFetchFailure(error)) {
       throw new ReportHubUnavailableError('search', baseUrl);
     }
     throw error;
@@ -177,7 +186,7 @@ export async function prepareReportViaHub(baseUrl: string, reportRef: string): P
   try {
     return await requestHubJson<PrepareReportHubResponse>(url);
   } catch (error) {
-    if (error instanceof TypeError) {
+    if (isFetchFailure(error)) {
       throw new ReportHubUnavailableError('prepare', normalizedBaseUrl);
     }
     throw error;
@@ -192,7 +201,7 @@ export async function readVaultViaHub(baseUrl: string, filename: string): Promis
   try {
     response = await fetch(url);
   } catch (error) {
-    if (error instanceof TypeError) {
+    if (isFetchFailure(error)) {
       throw new ReportHubUnavailableError('vault-read', normalizedBaseUrl);
     }
     throw error;

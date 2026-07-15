@@ -553,7 +553,7 @@ async function writeSingleFailure(args: {
     durationMs: summary.durationMs,
     retryIndex,
     traceSha1,
-    tracePath: ctx.traceDir,
+    tracePath: ctx.sourcePath ?? ctx.traceDir,
     topLevelSteps: cleanSteps(summary.topLevelSteps),
     issues: cleanIssues(summary.issues),
     actionDiagnostics: summary.actionDiagnostics,

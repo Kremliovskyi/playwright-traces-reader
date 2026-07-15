@@ -239,7 +239,7 @@ export async function writeTraceDigest(
   const runDir = path.join(resolvedOutputDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
 
   const traceSha1 = path.basename(ctx.traceDir);
-  const meta = options?.reportMetadata ?? (await getReportMetadata(path.dirname(ctx.traceDir)));
+  const meta = options?.reportMetadata ?? (await getReportMetadata(ctx.reportDataDir ?? path.dirname(ctx.sourcePath ?? ctx.traceDir)));
   const reportTraceMaps = meta ? buildReportTraceMaps(meta) : null;
 
   const [summary, roots, network, consoleEntries, domActions] = await Promise.all([
@@ -390,7 +390,7 @@ export async function writeTraceDigest(
     durationMs: summary.durationMs,
     retryIndex,
     traceSha1,
-    tracePath: ctx.traceDir,
+    tracePath: ctx.sourcePath ?? ctx.traceDir,
     counts: {
       steps: flat.length,
       leafActionsWithDom: domByStepCallId.size,
