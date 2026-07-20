@@ -15,6 +15,24 @@ export interface TraceContext {
   reportDataDir?: string;
 }
 
+const pendingTraceExtractions = new Map<string, Promise<string>>();
+
+async function publishTraceCache(temporaryTraceDir: string, finalTraceDir: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.promises.rename(temporaryTraceDir, finalTraceDir);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code === 'EEXIST' || code === 'ENOTEMPTY' || code === 'EPERM') && fs.existsSync(finalTraceDir))
+        return;
+      if (code !== 'EPERM' || attempt === 4)
+        throw error;
+      await new Promise(resolve => setTimeout(resolve, 50 * 2 ** attempt));
+    }
+  }
+}
+
 async function extractTraceZip(tracePath: string): Promise<string> {
   const archive = await fs.promises.readFile(tracePath);
   const digest = crypto.createHash('sha256').update(archive).digest('hex');
@@ -26,25 +44,32 @@ async function extractTraceZip(tracePath: string): Promise<string> {
   if (fs.existsSync(finalTraceDir))
     return finalTraceDir;
 
-  await fs.promises.mkdir(cacheRoot, { recursive: true });
-  const temporaryRoot = await fs.promises.mkdtemp(path.join(cacheRoot, `${digest}-`));
-  const temporaryTraceDir = path.join(temporaryRoot, traceName);
+  const pendingExtraction = pendingTraceExtractions.get(finalTraceDir);
+  if (pendingExtraction)
+    return pendingExtraction;
 
-  try {
-    await fs.promises.mkdir(temporaryTraceDir);
-    new AdmZip(archive).extractAllTo(temporaryTraceDir, true);
+  const extraction = (async () => {
+    await fs.promises.mkdir(finalRoot, { recursive: true });
+    const temporaryRoot = await fs.promises.mkdtemp(path.join(cacheRoot, `${digest}-`));
+    const temporaryTraceDir = path.join(temporaryRoot, traceName);
+
     try {
-      await fs.promises.rename(temporaryRoot, finalRoot);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST' && code !== 'ENOTEMPTY')
-        throw error;
+      await fs.promises.mkdir(temporaryTraceDir);
+      new AdmZip(archive).extractAllTo(temporaryTraceDir, true);
+      await publishTraceCache(temporaryTraceDir, finalTraceDir);
+    } finally {
+      await fs.promises.rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  } finally {
-    await fs.promises.rm(temporaryRoot, { recursive: true, force: true });
-  }
 
-  return finalTraceDir;
+    return finalTraceDir;
+  })();
+  pendingTraceExtractions.set(finalTraceDir, extraction);
+  try {
+    return await extraction;
+  } finally {
+    if (pendingTraceExtractions.get(finalTraceDir) === extraction)
+      pendingTraceExtractions.delete(finalTraceDir);
+  }
 }
 
 /**

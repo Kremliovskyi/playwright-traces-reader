@@ -17,6 +17,18 @@ The CLI is intended to be the default interface for agents and for direct use in
 npm install @andrii_kremlovskyi/playwright-traces-reader
 ```
 
+## Trace ZIP cache
+
+Commands that open trace ZIPs extract them into the persistent content-addressed cache at `<os.tmpdir>/playwright-traces-reader/trace-cache`. Source reports are never modified. Concurrent commands safely share completed entries, and transient Windows `EPERM` publication failures are retried.
+
+The cache has no automatic size limit. When no reader command is running, it may be deleted and will be recreated on demand. On Windows PowerShell:
+
+```powershell
+Remove-Item "$env:TEMP\playwright-traces-reader\trace-cache" -Recurse -Force
+```
+
+See [Trace ZIP materialization cache](ARCHITECTURE.md#trace-zip-materialization-cache) for publication and cleanup guarantees.
+
 ## Command Summary
 
 | Command | Scope | Purpose |

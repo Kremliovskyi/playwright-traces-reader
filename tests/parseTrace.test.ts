@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -125,7 +126,9 @@ describe('trace parsing', () => {
   test('extracts ZIP traces atomically without modifying their source directory', async () => {
     const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pwtr-zip-'));
     const zipPath = path.join(dataDir, 'trace-sha.zip');
-    writeTraceZip(zipPath, 'first');
+    const marker = crypto.randomUUID();
+    let cacheEntryRoot: string | undefined;
+    writeTraceZip(zipPath, marker);
 
     try {
       const contexts = await Promise.all([
@@ -133,14 +136,47 @@ describe('trace parsing', () => {
         prepareTraceDir(zipPath),
         prepareTraceDir(zipPath),
       ]);
+      cacheEntryRoot = path.dirname(contexts[0]!.traceDir);
 
       expect(new Set(contexts.map(context => context.traceDir)).size).toBe(1);
       expect(path.basename(contexts[0]!.traceDir)).toBe('trace-sha');
       expect(contexts[0]!.sourcePath).toBe(zipPath);
       expect(contexts[0]!.reportDataDir).toBe(dataDir);
       expect(fs.existsSync(path.join(dataDir, 'trace-sha'))).toBe(false);
-      expect(await fs.promises.readFile(path.join(contexts[0]!.traceDir, 'test.trace'), 'utf8')).toContain('first');
+      expect(await fs.promises.readFile(path.join(contexts[0]!.traceDir, 'test.trace'), 'utf8')).toContain(marker);
     } finally {
+      if (cacheEntryRoot)
+        await fs.promises.rm(cacheEntryRoot, { recursive: true, force: true });
+      await fs.promises.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('accepts a completed cache entry when Windows reports EPERM for a competing rename', async () => {
+    const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pwtr-eperm-'));
+    const zipPath = path.join(dataDir, 'trace-sha.zip');
+    const marker = crypto.randomUUID();
+    writeTraceZip(zipPath, marker);
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
+    const cacheRoot = path.join(os.tmpdir(), 'playwright-traces-reader', 'trace-cache');
+    const finalRoot = path.join(cacheRoot, digest);
+
+    const renameSpy = jest.spyOn(fs.promises, 'rename').mockImplementation(async (source, destination) => {
+      await fs.promises.cp(source, destination, { recursive: true });
+      throw Object.assign(new Error(`EPERM: operation not permitted, rename '${source}' -> '${destination}'`), {
+        code: 'EPERM',
+      });
+    });
+
+    try {
+      const context = await prepareTraceDir(zipPath);
+
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      expect(await fs.promises.readFile(path.join(context.traceDir, 'test.trace'), 'utf8')).toContain(marker);
+      const cacheEntries = await fs.promises.readdir(cacheRoot);
+      expect(cacheEntries.some(entry => entry.startsWith(`${digest}-`))).toBe(false);
+    } finally {
+      renameSpy.mockRestore();
+      await fs.promises.rm(finalRoot, { recursive: true, force: true });
       await fs.promises.rm(dataDir, { recursive: true, force: true });
     }
   });

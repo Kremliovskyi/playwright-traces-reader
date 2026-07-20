@@ -115,6 +115,24 @@ Primary APIs:
 
 `findTraces()` works entirely from report metadata embedded in `index.html`. It does not open or scan trace directories. The `grep` argument is always treated as a literal case-insensitive substring (not a regex) so that arbitrary test names — including brackets, parentheses, quotes, and non-Latin scripts — can be pasted directly without escaping. Unicode case folding is enabled via the `u` flag.
 
+#### Trace ZIP materialization cache
+
+`prepareTraceDir()` never extracts a ZIP beside the source report. It hashes the archive bytes with SHA-256 and materializes the trace under the operating system's temporary directory:
+
+```text
+<os.tmpdir>/playwright-traces-reader/trace-cache/<archive-digest>/<trace-name>/
+```
+
+The archive digest makes changed ZIP bytes select a new cache entry, while the final `trace-name` directory preserves the identity expected by report metadata. Identical in-process requests share one pending extraction promise. Across processes, each caller extracts into a unique staging directory and atomically renames the completed trace directory into the content-addressed destination.
+
+Cache publication handles filesystem contention as follows:
+
+- `EEXIST` and `ENOTEMPTY` are treated as another caller winning only when the final trace directory exists.
+- On Windows, `EPERM` can mean either that the destination already exists or that antivirus/indexing software briefly holds a new file. A verified completed destination is accepted; otherwise the rename is retried with exponential backoff for up to five attempts.
+- Staging-directory removal uses the recursive `fs.rm` retry options so transient Windows locks do not leave avoidable `<digest>-<random>` directories behind.
+
+The cache is persistent and has no automatic size-based eviction. It is safe to remove `<os.tmpdir>/playwright-traces-reader/trace-cache` when no reader command is running; the next command recreates entries from the source ZIPs.
+
 This layer has no formatting logic and no agent-specific behavior.
 
 ### 2. Extraction Layer
