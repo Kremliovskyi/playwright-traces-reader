@@ -74,6 +74,7 @@ import {
   createVaultReadCommandJson,
 } from './cli/json';
 import type { DomSnapshotOptions } from './index';
+import { startTraceCacheSession } from './traceCache';
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -84,6 +85,23 @@ const defaultIo: CliIo = {
   stdout: text => process.stdout.write(text),
   stderr: text => process.stderr.write(text),
 };
+
+const TRACE_READING_COMMANDS = new Set([
+  'failures',
+  'digest',
+  'summary',
+  'slow-steps',
+  'steps',
+  'network',
+  'request',
+  'console',
+  'errors',
+  'attachments',
+  'attachment',
+  'dom',
+  'timeline',
+  'screenshots',
+]);
 
 function parseFormat(value: string): OutputFormat {
   if (value === 'text' || value === 'json') return value;
@@ -458,6 +476,7 @@ function buildProgram(io: CliIo): Command {
 
 export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<number> {
   const program = buildProgram(io);
+  const cacheSession = TRACE_READING_COMMANDS.has(argv[0] ?? '') ? await startTraceCacheSession() : undefined;
 
   try {
     await program.parseAsync(argv, { from: 'user' });
@@ -470,6 +489,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo): Promise<num
     const message = error instanceof Error ? error.message : String(error);
     io.stderr(`${message}\n`);
     return 1;
+  } finally {
+    await cacheSession?.close();
   }
 }
 

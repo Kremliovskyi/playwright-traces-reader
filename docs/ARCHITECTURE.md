@@ -120,7 +120,12 @@ Primary APIs:
 `prepareTraceDir()` never extracts a ZIP beside the source report. It hashes the archive bytes with SHA-256 and materializes the trace under the operating system's temporary directory:
 
 ```text
-<os.tmpdir>/playwright-traces-reader/trace-cache/<archive-digest>/<trace-name>/
+<os.tmpdir>/playwright-traces-reader/trace-cache/
+|-- .leases/<pid>-<uuid>.json
+|-- .maintenance-lock/
+`-- <archive-digest>/
+  |-- .last-access
+  `-- <trace-name>/
 ```
 
 The archive digest makes changed ZIP bytes select a new cache entry, while the final `trace-name` directory preserves the identity expected by report metadata. Identical in-process requests share one pending extraction promise. Across processes, each caller extracts into a unique staging directory and atomically renames the completed trace directory into the content-addressed destination.
@@ -131,7 +136,11 @@ Cache publication handles filesystem contention as follows:
 - On Windows, `EPERM` can mean either that the destination already exists or that antivirus/indexing software briefly holds a new file. A verified completed destination is accepted; otherwise the rename is retried with exponential backoff for up to five attempts.
 - Staging-directory removal uses the recursive `fs.rm` retry options so transient Windows locks do not leave avoidable `<digest>-<random>` directories behind.
 
-The cache is persistent and has no automatic size-based eviction. It is safe to remove `<os.tmpdir>/playwright-traces-reader/trace-cache` when no reader command is running; the next command recreates entries from the source ZIPs.
+Age-based maintenance runs once before each trace-reading CLI command and on the first direct-library ZIP preparation in a process. A completed digest is removed after 24 hours without access; a staging directory is removed after 1 hour. Cache hits and successful publications touch `.last-access`. `PWTR_CACHE_MAX_AGE_HOURS` and `PWTR_CACHE_STAGING_MAX_AGE_HOURS` override the defaults, and `0` disables the corresponding policy. Invalid or negative values fall back to the default. There is intentionally no size cap.
+
+Each command creates a process lease before waiting for the short-lived maintenance lock. Under that lock, dead-process leases are removed and pruning proceeds only when no other live lease exists. This ordering prevents one process from deleting entries while another starts reading. Direct library consumers acquire a conservative process-lifetime lease on first ZIP use. A crashed process may leave a lease or lock behind; the next maintenance pass removes dead leases and atomically reclaims a dead or explicitly released lock.
+
+Maintenance and access tracking are best-effort so cleanup failures do not replace the requested analysis result. It is still safe to remove the entire cache when no reader command or library consumer is running; the next ZIP operation recreates entries from source archives.
 
 This layer has no formatting logic and no agent-specific behavior.
 

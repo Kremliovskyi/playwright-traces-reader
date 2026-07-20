@@ -21,7 +21,18 @@ npm install @andrii_kremlovskyi/playwright-traces-reader
 
 Commands that open trace ZIPs extract them into the persistent content-addressed cache at `<os.tmpdir>/playwright-traces-reader/trace-cache`. Source reports are never modified. Concurrent commands safely share completed entries, and transient Windows `EPERM` publication failures are retried.
 
-The cache has no automatic size limit. When no reader command is running, it may be deleted and will be recreated on demand. On Windows PowerShell:
+Before a trace-reading command starts, the reader removes completed entries that have not been accessed for 24 hours and staging directories older than 1 hour. Access is tracked by each digest directory's `.last-access` marker. A cross-process lease prevents pruning while another reader is active; direct library use holds a lease for the lifetime of its Node.js process. Maintenance is best-effort and never replaces the command's normal error handling.
+
+Override the defaults with environment variables:
+
+```text
+PWTR_CACHE_MAX_AGE_HOURS=24
+PWTR_CACHE_STAGING_MAX_AGE_HOURS=1
+```
+
+Set either value to `0` to disable that age-based policy. Invalid or negative values use the default. There is no size cap.
+
+When no reader command or library consumer is running, the entire cache may still be deleted and will be recreated on demand. On Windows PowerShell:
 
 ```powershell
 Remove-Item "$env:TEMP\playwright-traces-reader\trace-cache" -Recurse -Force

@@ -144,6 +144,7 @@ describe('trace parsing', () => {
       expect(contexts[0]!.reportDataDir).toBe(dataDir);
       expect(fs.existsSync(path.join(dataDir, 'trace-sha'))).toBe(false);
       expect(await fs.promises.readFile(path.join(contexts[0]!.traceDir, 'test.trace'), 'utf8')).toContain(marker);
+      expect(fs.existsSync(path.join(cacheEntryRoot, '.last-access'))).toBe(true);
     } finally {
       if (cacheEntryRoot)
         await fs.promises.rm(cacheEntryRoot, { recursive: true, force: true });

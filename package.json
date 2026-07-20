@@ -15,7 +15,7 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "test": "npm run test:unit",
-    "test:unit": "jest tests/cli.test.ts tests/hubCli.test.ts tests/parseTrace.test.ts tests/sanity.test.ts",
+    "test:unit": "jest tests/cli.test.ts tests/hubCli.test.ts tests/parseTrace.test.ts tests/sanity.test.ts tests/traceCache.test.ts",
     "test:real-fixture": "npm run build && jest --runInBand tests/realReportCompatibility.test.ts",
     "test:all": "npm run test:unit && npm run test:real-fixture",
     "compatibility:generate": "tsx scripts/generateCompatibilityReport.ts",

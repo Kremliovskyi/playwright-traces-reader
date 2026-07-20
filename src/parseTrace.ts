@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import * as os from 'os';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
 import { assertSupportedTraceVersion } from './traceCompatibility';
+import { ensureTraceCacheSession, getTraceCacheRoot, touchTraceCacheEntry } from './traceCache';
 
 export { NdjsonParseError, readNdjson } from './ndjson';
 
@@ -34,15 +34,18 @@ async function publishTraceCache(temporaryTraceDir: string, finalTraceDir: strin
 }
 
 async function extractTraceZip(tracePath: string): Promise<string> {
+  await ensureTraceCacheSession();
   const archive = await fs.promises.readFile(tracePath);
   const digest = crypto.createHash('sha256').update(archive).digest('hex');
   const traceName = path.basename(tracePath, '.zip');
-  const cacheRoot = path.join(os.tmpdir(), 'playwright-traces-reader', 'trace-cache');
+  const cacheRoot = getTraceCacheRoot();
   const finalRoot = path.join(cacheRoot, digest);
   const finalTraceDir = path.join(finalRoot, traceName);
 
-  if (fs.existsSync(finalTraceDir))
+  if (fs.existsSync(finalTraceDir)) {
+    await touchTraceCacheEntry(finalRoot);
     return finalTraceDir;
+  }
 
   const pendingExtraction = pendingTraceExtractions.get(finalTraceDir);
   if (pendingExtraction)
@@ -61,6 +64,7 @@ async function extractTraceZip(tracePath: string): Promise<string> {
       await fs.promises.rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
 
+    await touchTraceCacheEntry(finalRoot);
     return finalTraceDir;
   })();
   pendingTraceExtractions.set(finalTraceDir, extraction);
