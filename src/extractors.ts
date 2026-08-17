@@ -1,6 +1,16 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps, type TraceContext, type ReportMetadata, type ReportTraceMaps } from './parseTrace';
+import * as fs from "fs";
+import * as path from "path";
+import {
+  readNdjson,
+  getResourceBuffer,
+  normalizeTraceResourceReference,
+  listTraces,
+  getReportMetadata,
+  buildReportTraceMaps,
+  type TraceContext,
+  type ReportMetadata,
+  type ReportTraceMaps,
+} from "./parseTrace";
 
 // ---------- Types ----------
 
@@ -30,7 +40,7 @@ export interface TraceError {
 
 export interface NetworkEntry {
   id: number;
-  source: 'browser' | 'api';
+  source: "browser" | "api";
   pageId: string | null;
   method: string;
   url: string;
@@ -65,7 +75,7 @@ export interface ActionDiagnosticSummary {
 }
 
 export interface ConsoleEntry {
-  source: 'browser' | 'stdout' | 'stderr';
+  source: "browser" | "stdout" | "stderr";
   level: string;
   text: string;
   timestamp: number;
@@ -78,7 +88,7 @@ export interface ConsoleEntry {
 }
 
 export interface TraceIssue {
-  source: 'step' | 'page' | 'trace';
+  source: "step" | "page" | "trace";
   message: string;
   name: string | null;
   stack: string | null;
@@ -94,7 +104,7 @@ export interface TraceIssue {
 }
 
 export interface NetworkFilterOptions {
-  source?: 'all' | 'browser' | 'api';
+  source?: "all" | "browser" | "api";
   grep?: string;
   method?: string;
   status?: number;
@@ -111,6 +121,7 @@ export interface AttachmentEntry {
   contentType: string;
   path: string | null;
   sha1: string | null;
+  file: string | null;
   base64: string | null;
   size: number | null;
 }
@@ -121,6 +132,7 @@ export interface SavedAttachment extends AttachmentEntry {
 
 export interface Screenshot {
   sha1: string;
+  file: string;
   timestamp: number;
   pageId: string;
   width: number;
@@ -134,6 +146,7 @@ export interface Screenshot {
  */
 export interface ScreenshotMetadata {
   sha1: string;
+  file: string;
   timestamp: number;
   pageId: string;
   width: number;
@@ -143,7 +156,7 @@ export interface ScreenshotMetadata {
 // ---------- Internal trace event types ----------
 
 interface TraceEventBefore {
-  type: 'before';
+  type: "before";
   callId: string;
   stepId?: string;
   parentId?: string;
@@ -156,7 +169,7 @@ interface TraceEventBefore {
 }
 
 interface TraceEventAfter {
-  type: 'after';
+  type: "after";
   callId: string;
   endTime: number;
   annotations?: Array<{ type: string; description?: string }>;
@@ -166,12 +179,13 @@ interface TraceEventAfter {
     contentType: string;
     path?: string;
     sha1?: string;
+    file?: string;
     base64?: string;
   }>;
 }
 
 interface TraceEventConsole {
-  type: 'console';
+  type: "console";
   time: number;
   pageId?: string;
   messageType: string;
@@ -184,14 +198,14 @@ interface TraceEventConsole {
 }
 
 interface TraceEventStdio {
-  type: 'stdout' | 'stderr';
+  type: "stdout" | "stderr";
   timestamp: number;
   text?: string;
   base64?: string;
 }
 
 interface TraceEventPageError {
-  type: 'event';
+  type: "event";
   time: number;
   class: string;
   method: string;
@@ -209,15 +223,16 @@ interface TraceEventPageError {
 }
 
 interface TraceEventError {
-  type: 'error';
+  type: "error";
   message: string;
   stack?: Array<{ file: string; line: number; column: number }>;
 }
 
 interface TraceEventScreencast {
-  type: 'screencast-frame';
+  type: "screencast-frame";
   pageId: string;
-  sha1: string;
+  sha1?: string;
+  file?: string;
   width: number;
   height: number;
   timestamp: number;
@@ -225,7 +240,7 @@ interface TraceEventScreencast {
 }
 
 interface ResourceSnapshot {
-  type: 'resource-snapshot';
+  type: "resource-snapshot";
   snapshot: {
     pageref?: string;
     _apiRequest?: boolean;
@@ -236,7 +251,12 @@ interface ResourceSnapshot {
       method: string;
       url: string;
       headers: Array<{ name: string; value: string }>;
-      postData?: { mimeType: string; text?: string; _sha1?: string };
+      postData?: {
+        mimeType: string;
+        text?: string;
+        _sha1?: string;
+        _file?: string;
+      };
     };
     response: {
       status: number;
@@ -246,6 +266,7 @@ interface ResourceSnapshot {
         size: number;
         mimeType: string;
         _sha1?: string;
+        _file?: string;
         text?: string;
       };
     };
@@ -253,7 +274,7 @@ interface ResourceSnapshot {
 }
 
 interface TraceActionBeforeEvent {
-  type: 'before';
+  type: "before";
   callId: string;
   startTime: number;
   title?: string;
@@ -263,7 +284,7 @@ interface TraceActionBeforeEvent {
 }
 
 interface TraceActionAfterEvent {
-  type: 'after';
+  type: "after";
   callId: string;
   endTime: number;
 }
@@ -274,13 +295,17 @@ interface TraceActionAfterEvent {
  * Reconstructs the test step tree from a test.trace file.
  * Returns top-level steps (roots), each with nested children.
  */
-export async function getTestSteps(traceContext: TraceContext): Promise<TestStep[]> {
-  const testTracePath = path.join(traceContext.traceDir, 'test.trace');
+export async function getTestSteps(
+  traceContext: TraceContext,
+): Promise<TestStep[]> {
+  const testTracePath = path.join(traceContext.traceDir, "test.trace");
   const stepMap = new Map<string, TestStep>();
   const roots: TestStep[] = [];
 
-  for await (const event of readNdjson<TraceEventBefore | TraceEventAfter>(testTracePath)) {
-    if (event.type === 'before') {
+  for await (const event of readNdjson<TraceEventBefore | TraceEventAfter>(
+    testTracePath,
+  )) {
+    if (event.type === "before") {
       const step: TestStep = {
         callId: event.callId,
         parentId: event.parentId ?? null,
@@ -305,7 +330,7 @@ export async function getTestSteps(traceContext: TraceContext): Promise<TestStep
       } else {
         roots.push(step);
       }
-    } else if (event.type === 'after') {
+    } else if (event.type === "after") {
       const step = stepMap.get(event.callId);
       if (step) {
         step.endTime = event.endTime;
@@ -333,9 +358,11 @@ export async function getTestSteps(traceContext: TraceContext): Promise<TestStep
  * drill into nested steps to find the specific assertion or action that failed.
  * Use `getTestTitle()` to deduplicate retry traces across a full report run.
  */
-export async function getTopLevelFailures(traceContext: TraceContext): Promise<TestStep[]> {
+export async function getTopLevelFailures(
+  traceContext: TraceContext,
+): Promise<TestStep[]> {
   const roots = await getTestSteps(traceContext);
-  return roots.filter(step => step.error !== null);
+  return roots.filter((step) => step.error !== null);
 }
 
 // ---------- getNetworkTraffic ----------
@@ -346,21 +373,24 @@ export async function getTopLevelFailures(traceContext: TraceContext): Promise<T
  * 'api' (has _apiRequest, no pageref). Response and request bodies are
  * resolved from the resources/ directory when a _sha1 reference exists.
  */
-export async function getNetworkTraffic(traceContext: TraceContext, options?: NetworkFilterOptions): Promise<NetworkEntry[]> {
+export async function getNetworkTraffic(
+  traceContext: TraceContext,
+  options?: NetworkFilterOptions,
+): Promise<NetworkEntry[]> {
   const entries: NetworkEntry[] = [];
   const actions = await getBrowserActions(traceContext);
 
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const networkFiles = files.filter(f => f.endsWith('.network')).sort();
+  const networkFiles = files.filter((f) => f.endsWith(".network")).sort();
 
   for (const networkFile of networkFiles) {
     const filePath = path.join(traceContext.traceDir, networkFile);
     for await (const event of readNdjson<ResourceSnapshot>(filePath)) {
-      if (event.type !== 'resource-snapshot') continue;
+      if (event.type !== "resource-snapshot") continue;
 
       const snap = event.snapshot;
       const isBrowser = Boolean(snap.pageref);
-      const source: 'browser' | 'api' = isBrowser ? 'browser' : 'api';
+      const source: "browser" | "api" = isBrowser ? "browser" : "api";
 
       // Resolve request body
       let requestBody: string | null = null;
@@ -368,13 +398,24 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
       if (postData) {
         if (postData.text) {
           requestBody = postData.text;
-        } else if (postData._sha1) {
-          const sha1 = postData._sha1.replace(/\.bin$/, '');
-          const buf = await getResourceBuffer(traceContext, postData._sha1) ??
-            await getResourceBuffer(traceContext, sha1);
+        } else {
+          const resourceFile = normalizeTraceResourceReference(
+            postData._file,
+            postData._sha1,
+          );
+          const legacyFallback = postData._sha1?.replace(/\.bin$/, "");
+          const buf = resourceFile
+            ? ((await getResourceBuffer(traceContext, resourceFile)) ??
+              (legacyFallback
+                ? await getResourceBuffer(traceContext, legacyFallback)
+                : null))
+            : null;
           if (buf) {
-            if (postData.mimeType.includes('json') || postData.mimeType.includes('text')) {
-              requestBody = buf.toString('utf8');
+            if (
+              postData.mimeType.includes("json") ||
+              postData.mimeType.includes("text")
+            ) {
+              requestBody = buf.toString("utf8");
             } else {
               requestBody = `[binary: ${postData.mimeType}, ${buf.length} bytes]`;
             }
@@ -385,11 +426,18 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
       // Resolve response body
       let responseBody: string | null = null;
       const content = snap.response.content;
-      if (content._sha1) {
-        const buf = await getResourceBuffer(traceContext, content._sha1);
+      const responseResourceFile = normalizeTraceResourceReference(
+        content._file,
+        content._sha1,
+      );
+      if (responseResourceFile) {
+        const buf = await getResourceBuffer(traceContext, responseResourceFile);
         if (buf) {
-          if (content.mimeType.includes('json') || content.mimeType.includes('text')) {
-            responseBody = buf.toString('utf8');
+          if (
+            content.mimeType.includes("json") ||
+            content.mimeType.includes("text")
+          ) {
+            responseBody = buf.toString("utf8");
           } else {
             responseBody = `[binary: ${content.mimeType}, ${buf.length} bytes]`;
           }
@@ -414,7 +462,11 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
         startedDateTime: snap.startedDateTime,
         monotonicTime: snap._monotonicTime ?? null,
         durationMs: snap.time,
-        relatedAction: correlateAction(actions, new Date(snap.startedDateTime).getTime(), snap.pageref ?? null),
+        relatedAction: correlateAction(
+          actions,
+          new Date(snap.startedDateTime).getTime(),
+          snap.pageref ?? null,
+        ),
       });
     }
   }
@@ -422,27 +474,33 @@ export async function getNetworkTraffic(traceContext: TraceContext, options?: Ne
   return filterNetworkEntries(entries, options);
 }
 
-export async function getNetworkRequest(traceContext: TraceContext, requestId: number): Promise<NetworkEntry> {
+export async function getNetworkRequest(
+  traceContext: TraceContext,
+  requestId: number,
+): Promise<NetworkEntry> {
   const entries = await getNetworkTraffic(traceContext);
-  const entry = entries.find(candidate => candidate.id === requestId);
-  if (!entry)
-    throw new Error(`Request '${requestId}' not found.`);
+  const entry = entries.find((candidate) => candidate.id === requestId);
+  if (!entry) throw new Error(`Request '${requestId}' not found.`);
   return entry;
 }
 
 // ---------- getConsoleEntries ----------
 
-export async function getConsoleEntries(traceContext: TraceContext): Promise<ConsoleEntry[]> {
+export async function getConsoleEntries(
+  traceContext: TraceContext,
+): Promise<ConsoleEntry[]> {
   const entries: ConsoleEntry[] = [];
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+  const traceFiles = files.filter((f) => f.endsWith(".trace")).sort();
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
-    for await (const event of readNdjson<TraceEventConsole | TraceEventPageError | TraceEventStdio>(filePath)) {
-      if (event.type === 'console') {
+    for await (const event of readNdjson<
+      TraceEventConsole | TraceEventPageError | TraceEventStdio
+    >(filePath)) {
+      if (event.type === "console") {
         entries.push({
-          source: 'browser',
+          source: "browser",
           level: event.messageType,
           text: event.text,
           timestamp: event.time,
@@ -452,13 +510,14 @@ export async function getConsoleEntries(traceContext: TraceContext): Promise<Con
         continue;
       }
 
-      if (event.type === 'event' && event.method === 'pageError') {
-        const text = event.params.error?.error?.message ?? String(event.params.error?.value ?? '');
-        if (!text)
-          continue;
+      if (event.type === "event" && event.method === "pageError") {
+        const text =
+          event.params.error?.error?.message ??
+          String(event.params.error?.value ?? "");
+        if (!text) continue;
         entries.push({
-          source: 'browser',
-          level: 'error',
+          source: "browser",
+          level: "error",
           text,
           timestamp: event.time,
           pageId: event.pageId ?? null,
@@ -467,15 +526,14 @@ export async function getConsoleEntries(traceContext: TraceContext): Promise<Con
         continue;
       }
 
-      if (event.type === 'stdout' || event.type === 'stderr') {
-        let text = event.text?.trim() ?? '';
+      if (event.type === "stdout" || event.type === "stderr") {
+        let text = event.text?.trim() ?? "";
         if (!text && event.base64)
-          text = Buffer.from(event.base64, 'base64').toString('utf8').trim();
-        if (!text)
-          continue;
+          text = Buffer.from(event.base64, "base64").toString("utf8").trim();
+        if (!text) continue;
         entries.push({
           source: event.type,
-          level: event.type === 'stderr' ? 'error' : 'info',
+          level: event.type === "stderr" ? "error" : "info",
           text,
           timestamp: event.timestamp,
           pageId: null,
@@ -491,16 +549,17 @@ export async function getConsoleEntries(traceContext: TraceContext): Promise<Con
 
 // ---------- getTraceIssues ----------
 
-export async function getTraceIssues(traceContext: TraceContext): Promise<TraceIssue[]> {
+export async function getTraceIssues(
+  traceContext: TraceContext,
+): Promise<TraceIssue[]> {
   const issues: TraceIssue[] = [];
   const actions = await getBrowserActions(traceContext);
   const steps = await getTestSteps(traceContext);
 
   for (const step of flattenSteps(steps)) {
-    if (!step.error)
-      continue;
+    if (!step.error) continue;
     issues.push({
-      source: 'step',
+      source: "step",
       message: step.error.message,
       name: step.error.name,
       stack: step.error.stack ?? null,
@@ -508,59 +567,74 @@ export async function getTraceIssues(traceContext: TraceContext): Promise<TraceI
       callId: step.callId,
       title: step.title,
       location: null,
-      relatedAction: resolveIssueRelatedAction(actions, step.callId, step.endTime ?? step.startTime, null),
+      relatedAction: resolveIssueRelatedAction(
+        actions,
+        step.callId,
+        step.endTime ?? step.startTime,
+        null,
+      ),
     });
   }
 
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+  const traceFiles = files.filter((f) => f.endsWith(".trace")).sort();
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
-    for await (const event of readNdjson<TraceEventError | TraceEventPageError>(filePath)) {
-      if (event.type === 'error') {
+    for await (const event of readNdjson<TraceEventError | TraceEventPageError>(
+      filePath,
+    )) {
+      if (event.type === "error") {
         const firstFrame = event.stack?.[0];
         issues.push({
-          source: 'trace',
+          source: "trace",
           message: event.message,
-          name: 'TraceError',
+          name: "TraceError",
           stack: formatStackFrames(event.stack),
           timestamp: null,
           callId: null,
           title: null,
-          location: firstFrame ? { file: firstFrame.file, line: firstFrame.line, column: firstFrame.column } : null,
+          location: firstFrame
+            ? {
+                file: firstFrame.file,
+                line: firstFrame.line,
+                column: firstFrame.column,
+              }
+            : null,
           relatedAction: null,
         });
         continue;
       }
 
-      if (event.type === 'event' && event.method === 'pageError') {
+      if (event.type === "event" && event.method === "pageError") {
         const pageError = event.params.error?.error;
-        const message = pageError?.message ?? String(event.params.error?.value ?? '');
-        if (!message)
-          continue;
+        const message =
+          pageError?.message ?? String(event.params.error?.value ?? "");
+        if (!message) continue;
         issues.push({
-          source: 'page',
+          source: "page",
           message,
-          name: pageError?.name ?? 'PageError',
+          name: pageError?.name ?? "PageError",
           stack: pageError?.stack ?? null,
           timestamp: event.time,
           callId: null,
           title: null,
           location: null,
-          relatedAction: resolveIssueRelatedAction(actions, null, event.time, event.pageId ?? null),
+          relatedAction: resolveIssueRelatedAction(
+            actions,
+            null,
+            event.time,
+            event.pageId ?? null,
+          ),
         });
       }
     }
   }
 
   issues.sort((a, b) => {
-    if (a.timestamp === null && b.timestamp === null)
-      return 0;
-    if (a.timestamp === null)
-      return 1;
-    if (b.timestamp === null)
-      return -1;
+    if (a.timestamp === null && b.timestamp === null) return 0;
+    if (a.timestamp === null) return 1;
+    if (b.timestamp === null) return -1;
     return a.timestamp - b.timestamp;
   });
 
@@ -569,24 +643,31 @@ export async function getTraceIssues(traceContext: TraceContext): Promise<TraceI
 
 // ---------- getAttachments ----------
 
-export async function getAttachments(traceContext: TraceContext): Promise<AttachmentEntry[]> {
+export async function getAttachments(
+  traceContext: TraceContext,
+): Promise<AttachmentEntry[]> {
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace')).sort();
+  const traceFiles = files.filter((f) => f.endsWith(".trace")).sort();
   const actionTitleByCallId = new Map<string, string>();
   const attachments: AttachmentEntry[] = [];
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
-    for await (const event of readNdjson<TraceEventBefore | TraceEventAfter>(filePath)) {
-      if (event.type === 'before') {
+    for await (const event of readNdjson<TraceEventBefore | TraceEventAfter>(
+      filePath,
+    )) {
+      if (event.type === "before") {
         actionTitleByCallId.set(event.callId, event.title);
         continue;
       }
 
-      if (event.type !== 'after' || !event.attachments?.length)
-        continue;
+      if (event.type !== "after" || !event.attachments?.length) continue;
 
       for (const attachment of event.attachments) {
+        const resourceFile = normalizeTraceResourceReference(
+          attachment.file,
+          attachment.sha1,
+        );
         attachments.push({
           id: attachments.length + 1,
           callId: event.callId,
@@ -595,8 +676,12 @@ export async function getAttachments(traceContext: TraceContext): Promise<Attach
           contentType: attachment.contentType,
           path: attachment.path ?? null,
           sha1: attachment.sha1 ?? null,
+          file: resourceFile,
           base64: attachment.base64 ?? null,
-          size: await attachmentSize(traceContext, attachment),
+          size: await attachmentSize(traceContext, {
+            ...attachment,
+            ...(resourceFile ? { file: resourceFile } : {}),
+          }),
         });
       }
     }
@@ -605,17 +690,21 @@ export async function getAttachments(traceContext: TraceContext): Promise<Attach
   return attachments;
 }
 
-export async function extractAttachment(traceContext: TraceContext, attachmentId: number, outputPath?: string): Promise<SavedAttachment> {
+export async function extractAttachment(
+  traceContext: TraceContext,
+  attachmentId: number,
+  outputPath?: string,
+): Promise<SavedAttachment> {
   const attachments = await getAttachments(traceContext);
-  const attachment = attachments.find(entry => entry.id === attachmentId);
-  if (!attachment)
-    throw new Error(`Attachment '${attachmentId}' not found.`);
+  const attachment = attachments.find((entry) => entry.id === attachmentId);
+  if (!attachment) throw new Error(`Attachment '${attachmentId}' not found.`);
 
   const content = await attachmentContent(traceContext, attachment);
   if (!content)
     throw new Error(`Could not extract attachment '${attachmentId}'.`);
 
-  const savedPath = outputPath ?? path.join(process.cwd(), path.basename(attachment.name));
+  const savedPath =
+    outputPath ?? path.join(process.cwd(), path.basename(attachment.name));
   await fs.promises.mkdir(path.dirname(savedPath), { recursive: true });
   await fs.promises.writeFile(savedPath, content);
   return {
@@ -633,31 +722,40 @@ export async function extractAttachment(traceContext: TraceContext, attachmentId
  */
 export async function extractScreenshots(
   traceContext: TraceContext,
-  outDir: string
+  outDir: string,
 ): Promise<Screenshot[]> {
   const screenshots: Screenshot[] = [];
 
   await fs.promises.mkdir(outDir, { recursive: true });
 
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace') && f !== 'test.trace').sort();
+  const traceFiles = files
+    .filter((f) => f.endsWith(".trace") && f !== "test.trace")
+    .sort();
 
   let index = 0;
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
     for await (const event of readNdjson<TraceEventScreencast>(filePath)) {
-      if (event.type !== 'screencast-frame') continue;
+      if (event.type !== "screencast-frame") continue;
 
-      const buf = await getResourceBuffer(traceContext, event.sha1);
+      const resourceFile = normalizeTraceResourceReference(
+        event.file,
+        event.sha1,
+      );
+      if (!resourceFile) continue;
+
+      const buf = await getResourceBuffer(traceContext, resourceFile);
       if (!buf) continue;
 
-      const ext = event.sha1.endsWith('.jpeg') ? 'jpeg' : 'png';
-      const outFileName = `screenshot-${String(index).padStart(4, '0')}.${ext}`;
+      const ext = resourceFile.endsWith(".jpeg") ? "jpeg" : "png";
+      const outFileName = `screenshot-${String(index).padStart(4, "0")}.${ext}`;
       const savedPath = path.join(outDir, outFileName);
       await fs.promises.writeFile(savedPath, buf);
 
       screenshots.push({
-        sha1: event.sha1,
+        sha1: event.sha1 ?? resourceFile,
+        file: resourceFile,
         timestamp: event.timestamp,
         pageId: event.pageId,
         width: event.width,
@@ -712,33 +810,36 @@ export async function extractFailureScreenshots(
   outDir: string,
 ): Promise<FailureScreenshotSet[]> {
   const frames = await getScreenshotMetadata(traceContext);
-  if (frames.length === 0 || anchors.length === 0)
-    return [];
+  if (frames.length === 0 || anchors.length === 0) return [];
 
   frames.sort((a, b) => a.timestamp - b.timestamp);
 
   await fs.promises.mkdir(outDir, { recursive: true });
 
-  // SHA1 → relative file name (written once, referenced many times).
-  const writtenBySha1 = new Map<string, string>();
+  // Trace resource reference → relative file name (written once, referenced many times).
+  const writtenByResource = new Map<string, string>();
 
-  const ensureWritten = async (sha1: string): Promise<string | null> => {
-    const cached = writtenBySha1.get(sha1);
-    if (cached !== undefined)
-      return cached;
+  const ensureWritten = async (
+    resourceFile: string,
+  ): Promise<string | null> => {
+    const cached = writtenByResource.get(resourceFile);
+    if (cached !== undefined) return cached;
 
-    const buf = await getResourceBuffer(traceContext, sha1);
-    if (!buf)
-      return null;
+    const buf = await getResourceBuffer(traceContext, resourceFile);
+    if (!buf) return null;
 
-    const ext = sha1.endsWith('.jpeg') ? 'jpeg' : 'png';
+    const ext = resourceFile.endsWith(".jpeg") ? "jpeg" : "png";
     // The frame sha1 has the form `page@<pageId>-<wallMs>.<ext>`, so a fixed-prefix
     // slice collides for every frame of the same page. Sanitize the full sha1 to a
     // filesystem-safe stem so each distinct frame writes to a distinct file.
-    const safeStem = sha1.replace(/\.(jpeg|png)$/, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const safeStem = path.posix
+      .basename(resourceFile)
+      .replace(/\.(jpeg|png)$/, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
     const fileName = `frame-${safeStem}.${ext}`;
     await fs.promises.writeFile(path.join(outDir, fileName), buf);
-    writtenBySha1.set(sha1, fileName);
+    writtenByResource.set(resourceFile, fileName);
     return fileName;
   };
 
@@ -751,10 +852,8 @@ export async function extractFailureScreenshots(
     let actionDistance = Number.POSITIVE_INFINITY;
 
     for (const frame of frames) {
-      if (frame.timestamp <= anchor.timestamp)
-        before = frame; // frames are sorted, so the last match wins
-      if (after === null && frame.timestamp >= anchor.timestamp)
-        after = frame;
+      if (frame.timestamp <= anchor.timestamp) before = frame; // frames are sorted, so the last match wins
+      if (after === null && frame.timestamp >= anchor.timestamp) after = frame;
 
       const distance = Math.abs(frame.timestamp - anchor.timestamp);
       if (distance < actionDistance) {
@@ -767,9 +866,9 @@ export async function extractFailureScreenshots(
       anchorCallId: anchor.callId,
       anchorTitle: anchor.title,
       anchorTimestamp: anchor.timestamp,
-      before: before ? await ensureWritten(before.sha1) : null,
-      action: action ? await ensureWritten(action.sha1) : null,
-      after: after ? await ensureWritten(after.sha1) : null,
+      before: before ? await ensureWritten(before.file) : null,
+      action: action ? await ensureWritten(action.file) : null,
+      after: after ? await ensureWritten(after.file) : null,
     });
   }
 
@@ -798,7 +897,7 @@ export async function extractFailureScreenshots(
  */
 export interface DomSnapshot {
   callId: string;
-  phase: 'before' | 'action' | 'after';
+  phase: "before" | "action" | "after";
   snapshotName: string;
   frameId: string;
   frameUrl: string;
@@ -829,7 +928,7 @@ export interface FailureDomSnapshotRef {
   /** The action's callId — pass to `dom --near <callId>` to retrieve full HTML. */
   callId: string;
   /** Which snapshot phases are available for this action. */
-  phases: Array<'before' | 'action' | 'after'>;
+  phases: Array<"before" | "action" | "after">;
   /** Wall-clock timestamp of the primary phase snapshot. */
   timestamp: number;
   /** Frame URL from the primary phase, if available. */
@@ -850,8 +949,8 @@ export interface FailureDomSnapshotRef {
  *               without `near` it caps the result from the beginning.
  */
 export interface DomSnapshotOptions {
-  near?: 'last' | string;
-  phase?: 'before' | 'action' | 'after';
+  near?: "last" | string;
+  phase?: "before" | "action" | "after";
   limit?: number;
 }
 
@@ -859,7 +958,7 @@ export interface DomSnapshotOptions {
 type SnapshotNode = string | SnapshotNode[];
 
 interface RawFrameSnapshot {
-  type: 'frame-snapshot';
+  type: "frame-snapshot";
   snapshot: {
     callId: string;
     snapshotName: string;
@@ -887,13 +986,13 @@ interface RawFrameSnapshot {
  */
 function buildSnapshotNodeList(
   html: SnapshotNode,
-  cache: Map<SnapshotNode, SnapshotNode[]>
+  cache: Map<SnapshotNode, SnapshotNode[]>,
 ): SnapshotNode[] {
   const cached = cache.get(html);
   if (cached) return cached;
   const nodes: SnapshotNode[] = [];
   function visit(n: SnapshotNode): void {
-    if (typeof n === 'string') {
+    if (typeof n === "string") {
       nodes.push(n);
       return;
     }
@@ -911,8 +1010,22 @@ function buildSnapshotNodeList(
 }
 
 const VOID_TAGS = new Set([
-  'area','base','br','col','embed','hr','img','input',
-  'keygen','link','menuitem','meta','param','source','track','wbr',
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "keygen",
+  "link",
+  "menuitem",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
 ]);
 
 /** Maximum iframe nesting depth to inline before bailing out (cycle/runaway guard). */
@@ -970,21 +1083,21 @@ function resolveSnapshotNode(
   node: SnapshotNode,
   snapshotIndex: number,
   frameId: string,
-  ctx: RenderContext
+  ctx: RenderContext,
 ): string {
   const frameHistory = ctx.frameHistory.get(frameId) ?? [];
 
-  if (typeof node === 'string') {
+  if (typeof node === "string") {
     return escapeHtml(node);
   }
-  if (!Array.isArray(node)) return '';
+  if (!Array.isArray(node)) return "";
 
   // Subtree reference: [[offset, nodeIdx]]
   if (
     Array.isArray(node[0]) &&
     (node[0] as unknown[]).length === 2 &&
-    typeof (node[0] as unknown[])[0] === 'number' &&
-    typeof (node[0] as unknown[])[1] === 'number'
+    typeof (node[0] as unknown[])[0] === "number" &&
+    typeof (node[0] as unknown[])[1] === "number"
   ) {
     const [offset, nodeIdx] = node[0] as unknown as [number, number];
     const refIndex = snapshotIndex - offset;
@@ -999,23 +1112,33 @@ function resolveSnapshotNode(
   }
 
   // Element node: [tagName, attrs, ...children]
-  const [tagName, attrs, ...children] = node as [string, Record<string, string>, ...SnapshotNode[]];
-  if (typeof tagName !== 'string') return '';
+  const [tagName, attrs, ...children] = node as [
+    string,
+    Record<string, string>,
+    ...SnapshotNode[],
+  ];
+  if (typeof tagName !== "string") return "";
 
   const tag = tagName.toLowerCase();
-  if (tag === 'script') return '';  // not useful for AI analysis
+  if (tag === "script") return ""; // not useful for AI analysis
 
-  const safeAttrs = attrs && typeof attrs === 'object' && !Array.isArray(attrs)
-    ? (attrs as Record<string, string>)
-    : {};
+  const safeAttrs =
+    attrs && typeof attrs === "object" && !Array.isArray(attrs)
+      ? (attrs as Record<string, string>)
+      : {};
 
   // Inline child frames: <iframe>/<frame> with src="/snapshot/<frameId>".
-  if (tag === 'iframe' || tag === 'frame') {
-    const childFrameId = parseSnapshotFrameId(safeAttrs['src']);
+  if (tag === "iframe" || tag === "frame") {
+    const childFrameId = parseSnapshotFrameId(safeAttrs["src"]);
     const baseAttrs = Object.entries(safeAttrs)
-      .filter(([k]) => !k.startsWith('__playwright') && k.toLowerCase() !== 'src' && k.toLowerCase() !== 'srcdoc')
+      .filter(
+        ([k]) =>
+          !k.startsWith("__playwright") &&
+          k.toLowerCase() !== "src" &&
+          k.toLowerCase() !== "srcdoc",
+      )
       .map(([k, v]) => ` ${k}="${escapeAttr(String(v))}"`)
-      .join('');
+      .join("");
 
     if (childFrameId) {
       const childHtml = renderChildFrame(childFrameId, ctx);
@@ -1028,15 +1151,17 @@ function resolveSnapshotNode(
   }
 
   const attrStr = Object.entries(safeAttrs)
-    .filter(([k]) => !k.startsWith('__playwright'))
+    .filter(([k]) => !k.startsWith("__playwright"))
     .map(([k, v]) => ` ${k}="${escapeAttr(String(v))}"`)
-    .join('');
+    .join("");
 
   if (VOID_TAGS.has(tag)) {
     return `<${tag}${attrStr}>`;
   }
 
-  const inner = children.map(c => resolveSnapshotNode(c, snapshotIndex, frameId, ctx)).join('');
+  const inner = children
+    .map((c) => resolveSnapshotNode(c, snapshotIndex, frameId, ctx))
+    .join("");
   return `<${tag}${attrStr}>${inner}</${tag}>`;
 }
 
@@ -1047,7 +1172,7 @@ function resolveSnapshotNode(
  */
 function parseSnapshotFrameId(src: string | undefined): string | null {
   if (!src) return null;
-  const prefix = '/snapshot/';
+  const prefix = "/snapshot/";
   if (!src.startsWith(prefix)) return null;
   const id = src.substring(prefix.length).trim();
   return id.length > 0 ? id : null;
@@ -1058,27 +1183,37 @@ function parseSnapshotFrameId(src: string | undefined): string | null {
  * to an HTML string, recursing into its own child frames. Returns null when the
  * frame has no snapshot for this action or when the depth/cycle guard trips.
  */
-function renderChildFrame(childFrameId: string, ctx: RenderContext): string | null {
-  if (ctx.stack.has(childFrameId)) return null;       // cycle guard
+function renderChildFrame(
+  childFrameId: string,
+  ctx: RenderContext,
+): string | null {
+  if (ctx.stack.has(childFrameId)) return null; // cycle guard
   if (ctx.stack.size >= MAX_IFRAME_DEPTH) return null; // runaway depth guard
 
-  const entry = ctx.frameSnapshotsByName.get(childFrameId)?.get(ctx.snapshotName);
+  const entry = ctx.frameSnapshotsByName
+    .get(childFrameId)
+    ?.get(ctx.snapshotName);
   if (!entry) return null;
 
   ctx.stack.add(childFrameId);
   try {
-    return resolveSnapshotNode(entry.html, entry.historyIndex, childFrameId, ctx);
+    return resolveSnapshotNode(
+      entry.html,
+      entry.historyIndex,
+      childFrameId,
+      ctx,
+    );
   } finally {
     ctx.stack.delete(childFrameId);
   }
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 /**
@@ -1093,14 +1228,22 @@ function escapeAttr(s: string): string {
  * snapshots in this frame's history, find the `nodeIdx`-th node in post-order
  * DFS of that snapshot".
  */
-export async function getDomSnapshots(traceContext: TraceContext, options?: DomSnapshotOptions): Promise<ActionDomSnapshots[]> {
+export async function getDomSnapshots(
+  traceContext: TraceContext,
+  options?: DomSnapshotOptions,
+): Promise<ActionDomSnapshots[]> {
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace') && f !== 'test.trace').sort();
+  const traceFiles = files
+    .filter((f) => f.endsWith(".trace") && f !== "test.trace")
+    .sort();
 
   // Per-frame snapshot history: frameId → ordered list of raw html nodes (for back-refs).
   const frameHistory = new Map<string, SnapshotNode[]>();
   // Per-frame snapshot lookup: frameId → snapshotName → entry (for inlining child frames).
-  const frameSnapshotsByName = new Map<string, Map<string, FrameSnapshotEntry>>();
+  const frameSnapshotsByName = new Map<
+    string,
+    Map<string, FrameSnapshotEntry>
+  >();
 
   // Memoization cache for buildSnapshotNodeList — keyed by html object reference
   const dfsCache = new Map<SnapshotNode, SnapshotNode[]>();
@@ -1109,7 +1252,7 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
   // frame (including child iframes) has been collected.
   interface MainFrameRecord {
     callId: string;
-    phase: 'before' | 'action' | 'after';
+    phase: "before" | "action" | "after";
     snapshotName: string;
     frameId: string;
     frameUrl: string;
@@ -1126,10 +1269,20 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
     const filePath = path.join(traceContext.traceDir, traceFile);
 
     for await (const event of readNdjson<RawFrameSnapshot>(filePath)) {
-      if (event.type !== 'frame-snapshot') continue;
+      if (event.type !== "frame-snapshot") continue;
       const snap = event.snapshot;
 
-      const { snapshotName, callId, frameId, frameUrl, pageId, viewport, timestamp, html, isMainFrame } = snap;
+      const {
+        snapshotName,
+        callId,
+        frameId,
+        frameUrl,
+        pageId,
+        viewport,
+        timestamp,
+        html,
+        isMainFrame,
+      } = snap;
 
       // Append to per-frame history BEFORE anything else (so refs can point back to it)
       if (!frameHistory.has(frameId)) frameHistory.set(frameId, []);
@@ -1138,25 +1291,37 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
       const snapshotIndex = history.length - 1;
 
       // Index by snapshotName so parent frames can inline this child by name.
-      if (!frameSnapshotsByName.has(frameId)) frameSnapshotsByName.set(frameId, new Map());
-      frameSnapshotsByName.get(frameId)!.set(snapshotName, { html, historyIndex: snapshotIndex });
+      if (!frameSnapshotsByName.has(frameId))
+        frameSnapshotsByName.set(frameId, new Map());
+      frameSnapshotsByName
+        .get(frameId)!
+        .set(snapshotName, { html, historyIndex: snapshotIndex });
 
       if (!isMainFrame) continue; // child frames are only inlined, never top-level entries
 
       // Determine phase from snapshotName prefix
-      let phase: 'before' | 'action' | 'after';
-      if (snapshotName.startsWith('before@')) {
-        phase = 'before';
-      } else if (snapshotName.startsWith('after@')) {
-        phase = 'after';
-      } else if (snapshotName.startsWith('input@')) {
-        phase = 'action';
+      let phase: "before" | "action" | "after";
+      if (snapshotName.startsWith("before@")) {
+        phase = "before";
+      } else if (snapshotName.startsWith("after@")) {
+        phase = "after";
+      } else if (snapshotName.startsWith("input@")) {
+        phase = "action";
       } else {
         continue; // unknown phase, skip
       }
 
       mainFrameRecords.push({
-        callId, phase, snapshotName, frameId, frameUrl, pageId, timestamp, viewport, html, snapshotIndex,
+        callId,
+        phase,
+        snapshotName,
+        frameId,
+        frameUrl,
+        pageId,
+        timestamp,
+        viewport,
+        html,
+        snapshotIndex,
       });
     }
   }
@@ -1177,11 +1342,20 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
       stack: new Set<string>([rec.frameId]),
     };
 
-    const resolvedHtml = resolveSnapshotNode(rec.html, rec.snapshotIndex, rec.frameId, ctx);
-    const targetElement = findPlaywrightTarget(rec.html, {
-      ...ctx,
-      stack: new Set<string>([rec.frameId]),
-    }, rec.callId);
+    const resolvedHtml = resolveSnapshotNode(
+      rec.html,
+      rec.snapshotIndex,
+      rec.frameId,
+      ctx,
+    );
+    const targetElement = findPlaywrightTarget(
+      rec.html,
+      {
+        ...ctx,
+        stack: new Set<string>([rec.frameId]),
+      },
+      rec.callId,
+    );
 
     const domSnapshot: DomSnapshot = {
       callId: rec.callId,
@@ -1205,9 +1379,9 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
   for (const [callId, phases] of rawByCallId) {
     result.push({
       callId,
-      before: phases.get('before') ?? null,
-      action: phases.get('action') ?? null,
-      after:  phases.get('after')  ?? null,
+      before: phases.get("before") ?? null,
+      action: phases.get("action") ?? null,
+      after: phases.get("after") ?? null,
     });
   }
 
@@ -1222,20 +1396,22 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
     if (options.phase) {
       const p = options.phase;
       result = result
-        .map(r => ({
+        .map((r) => ({
           ...r,
-          before: p === 'before' ? r.before : null,
-          action: p === 'action' ? r.action : null,
-          after:  p === 'after'  ? r.after  : null,
+          before: p === "before" ? r.before : null,
+          action: p === "action" ? r.action : null,
+          after: p === "after" ? r.after : null,
         }))
-        .filter(r => r.before !== null || r.action !== null || r.after !== null);
+        .filter(
+          (r) => r.before !== null || r.action !== null || r.after !== null,
+        );
     }
 
-    if (options.near === 'last') {
+    if (options.near === "last") {
       const n = options.limit ?? 5;
       result = result.slice(-n);
     } else if (options.near) {
-      const idx = result.findIndex(r => r.callId === options.near);
+      const idx = result.findIndex((r) => r.callId === options.near);
       if (idx >= 0) {
         const n = options.limit ?? 5;
         const half = Math.floor(n / 2);
@@ -1257,25 +1433,43 @@ export async function getDomSnapshots(traceContext: TraceContext, options?: DomS
  * elements (matched by `src="/snapshot/<frameId>"`) so a target living inside a
  * child frame is still found. Cycles and runaway depth are guarded via `ctx.stack`.
  */
-function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext, currentCallId?: string): string | null {
+function findPlaywrightTarget(
+  node: SnapshotNode,
+  ctx?: RenderContext,
+  currentCallId?: string,
+): string | null {
   if (!Array.isArray(node) || node.length < 2) return null;
   const attrs = node[1];
-  if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) {
+  if (attrs && typeof attrs === "object" && !Array.isArray(attrs)) {
     const attributes = attrs as Record<string, string>;
-    if (Object.prototype.hasOwnProperty.call(attributes, '__playwright_target__'))
-      return attributes['__playwright_target__'] || currentCallId || null;
+    if (
+      Object.prototype.hasOwnProperty.call(attributes, "__playwright_target__")
+    )
+      return attributes["__playwright_target__"] || currentCallId || null;
 
     // Descend into child frames so targets inside iframes are still found.
-    if (ctx && typeof node[0] === 'string') {
+    if (ctx && typeof node[0] === "string") {
       const tag = node[0].toLowerCase();
-      if (tag === 'iframe' || tag === 'frame') {
-        const childFrameId = parseSnapshotFrameId((attrs as Record<string, string>)['src']);
-        if (childFrameId && !ctx.stack.has(childFrameId) && ctx.stack.size < MAX_IFRAME_DEPTH) {
-          const entry = ctx.frameSnapshotsByName.get(childFrameId)?.get(ctx.snapshotName);
+      if (tag === "iframe" || tag === "frame") {
+        const childFrameId = parseSnapshotFrameId(
+          (attrs as Record<string, string>)["src"],
+        );
+        if (
+          childFrameId &&
+          !ctx.stack.has(childFrameId) &&
+          ctx.stack.size < MAX_IFRAME_DEPTH
+        ) {
+          const entry = ctx.frameSnapshotsByName
+            .get(childFrameId)
+            ?.get(ctx.snapshotName);
           if (entry) {
             ctx.stack.add(childFrameId);
             try {
-              const found = findPlaywrightTarget(entry.html, ctx, currentCallId);
+              const found = findPlaywrightTarget(
+                entry.html,
+                ctx,
+                currentCallId,
+              );
               if (found) return found;
             } finally {
               ctx.stack.delete(childFrameId);
@@ -1288,7 +1482,11 @@ function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext, currentCa
   for (let i = 2; i < node.length; i++) {
     const child = node[i];
     if (Array.isArray(child)) {
-      const found = findPlaywrightTarget(child as SnapshotNode[], ctx, currentCallId);
+      const found = findPlaywrightTarget(
+        child as SnapshotNode[],
+        ctx,
+        currentCallId,
+      );
       if (found) return found;
     }
   }
@@ -1301,18 +1499,28 @@ function findPlaywrightTarget(node: SnapshotNode, ctx?: RenderContext, currentCa
  * Reads screencast-frame events from trace files and returns screenshot
  * metadata WITHOUT writing any files to disk. Used internally by getTimeline().
  */
-async function getScreenshotMetadata(traceContext: TraceContext): Promise<ScreenshotMetadata[]> {
+async function getScreenshotMetadata(
+  traceContext: TraceContext,
+): Promise<ScreenshotMetadata[]> {
   const screenshots: ScreenshotMetadata[] = [];
 
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace') && f !== 'test.trace').sort();
+  const traceFiles = files
+    .filter((f) => f.endsWith(".trace") && f !== "test.trace")
+    .sort();
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
     for await (const event of readNdjson<TraceEventScreencast>(filePath)) {
-      if (event.type !== 'screencast-frame') continue;
+      if (event.type !== "screencast-frame") continue;
+      const resourceFile = normalizeTraceResourceReference(
+        event.file,
+        event.sha1,
+      );
+      if (!resourceFile) continue;
       screenshots.push({
-        sha1: event.sha1,
+        sha1: event.sha1 ?? resourceFile,
+        file: resourceFile,
         timestamp: event.timestamp,
         pageId: event.pageId,
         width: event.width,
@@ -1336,13 +1544,15 @@ function flattenSteps(steps: TestStep[]): TestStep[] {
   return out;
 }
 
-function buildActionDiagnostics(networkCalls: NetworkEntry[], issues: TraceIssue[]): ActionDiagnosticSummary[] {
+function buildActionDiagnostics(
+  networkCalls: NetworkEntry[],
+  issues: TraceIssue[],
+): ActionDiagnosticSummary[] {
   const byCallId = new Map<string, ActionDiagnosticSummary>();
 
   const ensure = (action: RelatedActionRef): ActionDiagnosticSummary => {
     const existing = byCallId.get(action.callId);
-    if (existing)
-      return existing;
+    if (existing) return existing;
 
     const created: ActionDiagnosticSummary = {
       action,
@@ -1355,39 +1565,44 @@ function buildActionDiagnostics(networkCalls: NetworkEntry[], issues: TraceIssue
   };
 
   for (const entry of networkCalls) {
-    if (!entry.relatedAction)
-      continue;
+    if (!entry.relatedAction) continue;
     const bucket = ensure(entry.relatedAction);
     bucket.networkCallCount += 1;
-    if (entry.status >= 400)
-      bucket.failingNetworkCallCount += 1;
+    if (entry.status >= 400) bucket.failingNetworkCallCount += 1;
   }
 
   for (const issue of issues) {
-    if (!issue.relatedAction)
-      continue;
+    if (!issue.relatedAction) continue;
     ensure(issue.relatedAction).issueCount += 1;
   }
 
   return [...byCallId.values()].sort((left, right) => {
-    const leftScore = left.failingNetworkCallCount * 10 + left.issueCount * 5 + left.networkCallCount;
-    const rightScore = right.failingNetworkCallCount * 10 + right.issueCount * 5 + right.networkCallCount;
+    const leftScore =
+      left.failingNetworkCallCount * 10 +
+      left.issueCount * 5 +
+      left.networkCallCount;
+    const rightScore =
+      right.failingNetworkCallCount * 10 +
+      right.issueCount * 5 +
+      right.networkCallCount;
     return rightScore - leftScore;
   });
 }
 
 async function attachmentSize(
   traceContext: TraceContext,
-  attachment: { sha1?: string; base64?: string; path?: string }
+  attachment: { sha1?: string; file?: string; base64?: string; path?: string },
 ): Promise<number | null> {
-  if (attachment.sha1) {
-    const buffer = await getResourceBuffer(traceContext, attachment.sha1);
-    if (buffer)
-      return buffer.length;
+  const resourceFile = normalizeTraceResourceReference(
+    attachment.file,
+    attachment.sha1,
+  );
+  if (resourceFile) {
+    const buffer = await getResourceBuffer(traceContext, resourceFile);
+    if (buffer) return buffer.length;
   }
 
-  if (attachment.base64)
-    return Buffer.from(attachment.base64, 'base64').length;
+  if (attachment.base64) return Buffer.from(attachment.base64, "base64").length;
 
   if (attachment.path && fs.existsSync(attachment.path)) {
     const stat = await fs.promises.stat(attachment.path);
@@ -1397,15 +1612,20 @@ async function attachmentSize(
   return null;
 }
 
-async function attachmentContent(traceContext: TraceContext, attachment: AttachmentEntry): Promise<Buffer | null> {
-  if (attachment.sha1) {
-    const buffer = await getResourceBuffer(traceContext, attachment.sha1);
-    if (buffer)
-      return buffer;
+async function attachmentContent(
+  traceContext: TraceContext,
+  attachment: AttachmentEntry,
+): Promise<Buffer | null> {
+  const resourceFile = normalizeTraceResourceReference(
+    attachment.file ?? undefined,
+    attachment.sha1 ?? undefined,
+  );
+  if (resourceFile) {
+    const buffer = await getResourceBuffer(traceContext, resourceFile);
+    if (buffer) return buffer;
   }
 
-  if (attachment.base64)
-    return Buffer.from(attachment.base64, 'base64');
+  if (attachment.base64) return Buffer.from(attachment.base64, "base64");
 
   if (attachment.path && fs.existsSync(attachment.path))
     return fs.promises.readFile(attachment.path);
@@ -1413,21 +1633,30 @@ async function attachmentContent(traceContext: TraceContext, attachment: Attachm
   return null;
 }
 
-function formatStackFrames(stack?: Array<{ file: string; line: number; column: number }>): string | null {
-  if (!stack?.length)
-    return null;
-  return stack.map(frame => `at ${frame.file}:${frame.line}:${frame.column}`).join('\n');
+function formatStackFrames(
+  stack?: Array<{ file: string; line: number; column: number }>,
+): string | null {
+  if (!stack?.length) return null;
+  return stack
+    .map((frame) => `at ${frame.file}:${frame.line}:${frame.column}`)
+    .join("\n");
 }
 
-async function getBrowserActions(traceContext: TraceContext): Promise<RelatedActionRef[]> {
+async function getBrowserActions(
+  traceContext: TraceContext,
+): Promise<RelatedActionRef[]> {
   const files = await fs.promises.readdir(traceContext.traceDir);
-  const traceFiles = files.filter(f => /^\d+-trace\.trace$/.test(f)).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+  const traceFiles = files
+    .filter((f) => /^\d+-trace\.trace$/.test(f))
+    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
   const actions = new Map<string, RelatedActionRef>();
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
-    for await (const event of readNdjson<TraceActionBeforeEvent | TraceActionAfterEvent>(filePath)) {
-      if (event.type === 'before') {
+    for await (const event of readNdjson<
+      TraceActionBeforeEvent | TraceActionAfterEvent
+    >(filePath)) {
+      if (event.type === "before") {
         actions.set(event.callId, {
           callId: event.callId,
           title: event.title ?? `${event.class}.${event.method}`,
@@ -1439,10 +1668,9 @@ async function getBrowserActions(traceContext: TraceContext): Promise<RelatedAct
         continue;
       }
 
-      if (event.type === 'after') {
+      if (event.type === "after") {
         const action = actions.get(event.callId);
-        if (action)
-          action.endTime = event.endTime;
+        if (action) action.endTime = event.endTime;
       }
     }
   }
@@ -1450,20 +1678,25 @@ async function getBrowserActions(traceContext: TraceContext): Promise<RelatedAct
   return [...actions.values()].sort((a, b) => a.startTime - b.startTime);
 }
 
-function correlateAction(actions: RelatedActionRef[], timestamp: number, pageId: string | null): RelatedActionRef | null {
+function correlateAction(
+  actions: RelatedActionRef[],
+  timestamp: number,
+  pageId: string | null,
+): RelatedActionRef | null {
   let best: RelatedActionRef | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const action of actions) {
-    if (pageId && action.pageId && action.pageId !== pageId)
-      continue;
+    if (pageId && action.pageId && action.pageId !== pageId) continue;
 
     const endTime = action.endTime ?? action.startTime;
     const withinWindow = timestamp >= action.startTime && timestamp <= endTime;
-    const distance = withinWindow ? 0 : Math.min(
-      Math.abs(timestamp - action.startTime),
-      Math.abs(timestamp - endTime),
-    );
+    const distance = withinWindow
+      ? 0
+      : Math.min(
+          Math.abs(timestamp - action.startTime),
+          Math.abs(timestamp - endTime),
+        );
 
     if (distance < bestDistance) {
       best = action;
@@ -1481,42 +1714,46 @@ function resolveIssueRelatedAction(
   pageId: string | null,
 ): RelatedActionRef | null {
   if (callId) {
-    const directMatch = actions.find(action => action.callId === callId);
-    if (directMatch)
-      return directMatch;
+    const directMatch = actions.find((action) => action.callId === callId);
+    if (directMatch) return directMatch;
   }
 
   return correlateAction(actions, timestamp, pageId);
 }
 
-function filterNetworkEntries(entries: NetworkEntry[], options?: NetworkFilterOptions): NetworkEntry[] {
-  if (!options)
-    return entries;
+function filterNetworkEntries(
+  entries: NetworkEntry[],
+  options?: NetworkFilterOptions,
+): NetworkEntry[] {
+  if (!options) return entries;
 
   let filtered = entries;
 
-  if (options.source && options.source !== 'all')
-    filtered = filtered.filter(entry => entry.source === options.source);
+  if (options.source && options.source !== "all")
+    filtered = filtered.filter((entry) => entry.source === options.source);
 
   if (options.grep) {
-    const pattern = new RegExp(options.grep, 'i');
-    filtered = filtered.filter(entry => pattern.test(entry.url));
+    const pattern = new RegExp(options.grep, "i");
+    filtered = filtered.filter((entry) => pattern.test(entry.url));
   }
 
   if (options.method)
-    filtered = filtered.filter(entry => entry.method.toLowerCase() === options.method!.toLowerCase());
+    filtered = filtered.filter(
+      (entry) => entry.method.toLowerCase() === options.method!.toLowerCase(),
+    );
 
   if (options.status !== undefined)
-    filtered = filtered.filter(entry => entry.status === options.status);
+    filtered = filtered.filter((entry) => entry.status === options.status);
 
   if (options.failed)
-    filtered = filtered.filter(entry => entry.status >= 400);
+    filtered = filtered.filter((entry) => entry.status >= 400);
 
   if (options.near)
-    filtered = filtered.filter(entry => entry.relatedAction?.callId === options.near);
+    filtered = filtered.filter(
+      (entry) => entry.relatedAction?.callId === options.near,
+    );
 
-  if (options.limit !== undefined)
-    filtered = filtered.slice(0, options.limit);
+  if (options.limit !== undefined) filtered = filtered.slice(0, options.limit);
 
   return filtered;
 }
@@ -1530,7 +1767,7 @@ export interface TimelineEntry {
   /** Wall-clock timestamp in milliseconds since epoch. */
   timestamp: number;
   /** Event category. */
-  type: 'step' | 'screenshot' | 'dom' | 'network';
+  type: "step" | "screenshot" | "dom" | "network";
   /**
    * Payload. Cast based on `type`:
    * - `'step'`       → TestStep
@@ -1552,7 +1789,9 @@ export interface TimelineEntry {
  * Steps are flattened (all nesting levels included). Screenshots are metadata
  * only (no disk writes — use extractScreenshots() for that).
  */
-export async function getTimeline(traceContext: TraceContext): Promise<TimelineEntry[]> {
+export async function getTimeline(
+  traceContext: TraceContext,
+): Promise<TimelineEntry[]> {
   const [steps, screenshots, domSnapshots, network] = await Promise.all([
     getTestSteps(traceContext),
     getScreenshotMetadata(traceContext),
@@ -1563,20 +1802,24 @@ export async function getTimeline(traceContext: TraceContext): Promise<TimelineE
   const entries: TimelineEntry[] = [];
 
   for (const step of flattenSteps(steps)) {
-    entries.push({ timestamp: step.startTime, type: 'step', data: step });
+    entries.push({ timestamp: step.startTime, type: "step", data: step });
   }
 
   for (const shot of screenshots) {
-    entries.push({ timestamp: shot.timestamp, type: 'screenshot', data: shot });
+    entries.push({ timestamp: shot.timestamp, type: "screenshot", data: shot });
   }
 
   for (const dom of domSnapshots) {
     const ts = (dom.before ?? dom.action ?? dom.after)?.timestamp ?? 0;
-    entries.push({ timestamp: ts, type: 'dom', data: dom });
+    entries.push({ timestamp: ts, type: "dom", data: dom });
   }
 
   for (const net of network) {
-    entries.push({ timestamp: new Date(net.startedDateTime).getTime(), type: 'network', data: net });
+    entries.push({
+      timestamp: new Date(net.startedDateTime).getTime(),
+      type: "network",
+      data: net,
+    });
   }
 
   entries.sort((a, b) => a.timestamp - b.timestamp);
@@ -1587,7 +1830,7 @@ export async function getTimeline(traceContext: TraceContext): Promise<TimelineE
 
 /** Internal event shape for context-options entries in numbered trace files. */
 interface TraceEventContextOptions {
-  type: 'context-options';
+  type: "context-options";
   title?: string;
 }
 
@@ -1606,16 +1849,18 @@ interface TraceEventContextOptions {
  * Returns `null` when no numbered trace file with a `context-options` title is
  * found (e.g. pure API traces with no browser context).
  */
-export async function getTestTitle(traceContext: TraceContext): Promise<string | null> {
+export async function getTestTitle(
+  traceContext: TraceContext,
+): Promise<string | null> {
   const files = await fs.promises.readdir(traceContext.traceDir);
   const traceFiles = files
-    .filter(f => /^\d+-trace\.trace$/.test(f))
+    .filter((f) => /^\d+-trace\.trace$/.test(f))
     .sort((a, b) => parseInt(a) - parseInt(b));
 
   for (const traceFile of traceFiles) {
     const filePath = path.join(traceContext.traceDir, traceFile);
     for await (const event of readNdjson<TraceEventContextOptions>(filePath)) {
-      if (event.type === 'context-options' && event.title) {
+      if (event.type === "context-options" && event.title) {
         return event.title;
       }
     }
@@ -1641,13 +1886,13 @@ export interface TraceSummary {
   /** Title of the top-level test step (from test.trace root step). */
   title: string;
   /** Whether the test passed or failed. */
-  status: 'passed' | 'failed';
+  status: "passed" | "failed";
   /** Total test duration in ms, or null if unavailable. */
   durationMs: number | null;
   /** The top-level error, or null if passed. */
   error: TraceError | null;
   /** Non-hook root steps representing the visible test flow (test.step() blocks). */
-  topLevelSteps: TestStep[];  /** Top 5 slowest steps across the entire tree. */
+  topLevelSteps: TestStep[]; /** Top 5 slowest steps across the entire tree. */
   slowestSteps: TestStep[];
   /** All HTTP calls (both Node.js APIRequestContext and browser XHR/fetch/navigation). */
   networkCalls: NetworkEntry[];
@@ -1668,7 +1913,7 @@ export interface TraceSummary {
    * - `'expected'` — the test passed (should not appear in failed summaries)
    * - `null` — outcome unknown (`reportMetadata` was `null` or trace SHA1 not found)
    */
-  outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
+  outcome: "expected" | "unexpected" | "flaky" | "skipped" | null;
 }
 
 /** Options for {@link getSummary}. */
@@ -1695,7 +1940,10 @@ export interface GetSummaryOptions {
  * covers the 90% case without requiring separate calls to getTestSteps(),
  * getNetworkTraffic(), and getDomSnapshots().
  */
-export async function getSummary(traceContext: TraceContext, options: GetSummaryOptions): Promise<TraceSummary> {
+export async function getSummary(
+  traceContext: TraceContext,
+  options: GetSummaryOptions,
+): Promise<TraceSummary> {
   const [roots, network, domAll, testTitle, issues] = await Promise.all([
     getTestSteps(traceContext),
     getNetworkTraffic(traceContext),
@@ -1706,57 +1954,70 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
 
   // Infrastructure steps injected by Playwright — not meaningful test content.
   const HOOK_TITLES = new Set([
-    'Before Hooks', 'After Hooks',
-    'Worker Cleanup', 'Worker Cleanup Hooks', 'Worker Setup',
+    "Before Hooks",
+    "After Hooks",
+    "Worker Cleanup",
+    "Worker Cleanup Hooks",
+    "Worker Setup",
   ]);
   const isHook = (s: TestStep) =>
     HOOK_TITLES.has(s.title) || s.title.startsWith('Attach "');
 
   // Test steps = non-infrastructure roots (the user-visible test.step() blocks)
-  const testRoots = roots.filter(r => !isHook(r));
+  const testRoots = roots.filter((r) => !isHook(r));
 
   // Main root: the failing step if any, otherwise the longest test step
   const mainRoot =
-    testRoots.find(r => r.error !== null) ??
+    testRoots.find((r) => r.error !== null) ??
     testRoots.reduce<TestStep | null>(
-      (best, r) => best === null || (r.durationMs ?? 0) > (best.durationMs ?? 0) ? r : best,
-      null
+      (best, r) =>
+        best === null || (r.durationMs ?? 0) > (best.durationMs ?? 0)
+          ? r
+          : best,
+      null,
     ) ??
     roots[0] ??
     null;
 
-  const title = mainRoot?.title ?? 'Unknown';
-  let status: 'passed' | 'failed' = roots.some(r => r.error !== null) ? 'failed' : 'passed';
-  if (status === 'passed' && options.reportMetadata) {
+  const title = mainRoot?.title ?? "Unknown";
+  let status: "passed" | "failed" = roots.some((r) => r.error !== null)
+    ? "failed"
+    : "passed";
+  if (status === "passed" && options.reportMetadata) {
     const sha1 = path.basename(traceContext.traceDir);
-    const traceMaps = options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata);
+    const traceMaps =
+      options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata);
     const outcome = traceMaps.outcomeByTraceSha1.get(sha1);
     const retryIndex = traceMaps.retryByTraceSha1.get(sha1) ?? 0;
-    if (outcome === 'unexpected') {
-      status = 'failed';
-    } else if (outcome === 'flaky') {
+    if (outcome === "unexpected") {
+      status = "failed";
+    } else if (outcome === "flaky") {
       let resultsLength = 1;
       for (const file of options.reportMetadata.files) {
-        const test = file.tests.find(t => t.testId === traceMaps.testIdByTraceSha1.get(sha1));
+        const test = file.tests.find(
+          (t) => t.testId === traceMaps.testIdByTraceSha1.get(sha1),
+        );
         if (test) {
           resultsLength = test.results.length;
           break;
         }
       }
       if (retryIndex < resultsLength - 1) {
-        status = 'failed';
+        status = "failed";
       }
-    } else if (outcome === 'expected') {
+    } else if (outcome === "expected") {
       let ok = true;
       for (const file of options.reportMetadata.files) {
-        const test = file.tests.find(t => t.testId === traceMaps.testIdByTraceSha1.get(sha1));
+        const test = file.tests.find(
+          (t) => t.testId === traceMaps.testIdByTraceSha1.get(sha1),
+        );
         if (test) {
           ok = test.ok;
           break;
         }
       }
       if (!ok) {
-        status = 'failed';
+        status = "failed";
       }
     }
   }
@@ -1768,7 +2029,7 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
 
   const allSteps = flattenSteps(roots);
   const slowestSteps = allSteps
-    .filter(s => s.durationMs !== null)
+    .filter((s) => s.durationMs !== null)
     .sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0))
     .slice(0, 5);
 
@@ -1779,15 +2040,18 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
   if (error && mainRoot && domAll.length > 0) {
     const failureTime = mainRoot.endTime ?? mainRoot.startTime;
     const closest = domAll.reduce((best, current) => {
-      const ct = (current.before ?? current.action ?? current.after)?.timestamp ?? 0;
+      const ct =
+        (current.before ?? current.action ?? current.after)?.timestamp ?? 0;
       const cct = (best.before ?? best.action ?? best.after)?.timestamp ?? 0;
-      return Math.abs(ct - failureTime) < Math.abs(cct - failureTime) ? current : best;
+      return Math.abs(ct - failureTime) < Math.abs(cct - failureTime)
+        ? current
+        : best;
     }, domAll[0]!);
 
-    const phases: Array<'before' | 'action' | 'after'> = [];
-    if (closest.before) phases.push('before');
-    if (closest.action) phases.push('action');
-    if (closest.after) phases.push('after');
+    const phases: Array<"before" | "action" | "after"> = [];
+    if (closest.before) phases.push("before");
+    if (closest.action) phases.push("action");
+    if (closest.after) phases.push("after");
     const primary = closest.action ?? closest.before ?? closest.after;
 
     failureDomSnapshot = {
@@ -1812,7 +2076,12 @@ export async function getSummary(traceContext: TraceContext, options: GetSummary
     actionDiagnostics,
     failureDomSnapshot,
     outcome: options.reportMetadata
-      ? (options.reportTraceMaps ?? buildReportTraceMaps(options.reportMetadata)).outcomeByTraceSha1.get(path.basename(traceContext.traceDir)) as TraceSummary['outcome'] ?? null
+      ? (((
+          options.reportTraceMaps ??
+          buildReportTraceMaps(options.reportMetadata)
+        ).outcomeByTraceSha1.get(
+          path.basename(traceContext.traceDir),
+        ) as TraceSummary["outcome"]) ?? null)
       : null,
   };
 }
@@ -1875,11 +2144,12 @@ export async function getFailedTraceSelections(
       let isSkipped = false;
 
       if (outcomeByTraceSha1) {
-        if (outcome === 'skipped') isSkipped = true;
+        if (outcome === "skipped") isSkipped = true;
       } else {
         isSkipped = topFailures.every(
-          f => f.annotations.some(a => a.type === 'skip') ||
-               f.error?.message?.includes('Test is skipped:'),
+          (f) =>
+            f.annotations.some((a) => a.type === "skip") ||
+            f.error?.message?.includes("Test is skipped:"),
         );
       }
 
@@ -1902,7 +2172,10 @@ export async function getFailedTraceSelections(
 
   const results: FailedTraceSelection[] = [];
   for (const { ctx } of byKey.values()) {
-    const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
+    const summary = await getSummary(ctx, {
+      reportMetadata: meta,
+      reportTraceMaps: traceMaps,
+    });
     results.push({
       tracePath: ctx.traceDir,
       traceSha1: path.basename(ctx.traceDir),
@@ -1941,8 +2214,10 @@ export async function getFailedTraceSelections(
  * @param options        Optional filtering options.
  * @returns `TraceSummary[]` for each unique failing test (one per unique test).
  */
-export async function getFailedTestSummaries(reportDataDir: string, options?: GetFailedTestSummariesOptions): Promise<TraceSummary[]> {
+export async function getFailedTestSummaries(
+  reportDataDir: string,
+  options?: GetFailedTestSummariesOptions,
+): Promise<TraceSummary[]> {
   const selections = await getFailedTraceSelections(reportDataDir, options);
-  return selections.map(selection => selection.summary);
+  return selections.map((selection) => selection.summary);
 }
-

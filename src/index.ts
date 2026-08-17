@@ -1,5 +1,22 @@
-export { NdjsonParseError, prepareTraceDir, readNdjson, getResourceBuffer, listTraces, getReportMetadata, buildReportTraceMaps, findTraces } from './parseTrace';
-export type { TraceContext, ReportTestSummary, ReportMetadata, ReportTraceMaps, FoundTrace } from './parseTrace';
+export {
+  NdjsonParseError,
+  prepareTraceDir,
+  readNdjson,
+  getResourceBuffer,
+  normalizeTraceResourceReference,
+  traceResourceExists,
+  listTraces,
+  getReportMetadata,
+  buildReportTraceMaps,
+  findTraces,
+} from "./parseTrace";
+export type {
+  TraceContext,
+  ReportTestSummary,
+  ReportMetadata,
+  ReportTraceMaps,
+  FoundTrace,
+} from "./parseTrace";
 
 export {
   InconsistentTraceVersionError,
@@ -7,8 +24,11 @@ export {
   UnsupportedTraceVersionError,
   assertSupportedTraceVersion,
   inspectTraceCompatibility,
-} from './traceCompatibility';
-export type { TraceCompatibilityReport, TraceFileCompatibility } from './traceCompatibility';
+} from "./traceCompatibility";
+export type {
+  TraceCompatibilityReport,
+  TraceFileCompatibility,
+} from "./traceCompatibility";
 
 export {
   getTestSteps,
@@ -26,10 +46,10 @@ export {
   getTimeline,
   getSummary,
   getFailedTestSummaries,
-} from './extractors';
+} from "./extractors";
 
-export { writeFailureDigests } from './failureDigest';
-export { writeTraceDigest } from './digestTrace';
+export { writeFailureDigests } from "./failureDigest";
+export { writeTraceDigest } from "./digestTrace";
 
 export type {
   ActionDiagnosticSummary,
@@ -56,4 +76,4 @@ export type {
   GetSummaryOptions,
   GetFailedTestSummariesOptions,
   FailedTraceSelection,
-} from './extractors';
+} from "./extractors";

@@ -1,5 +1,5 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from "fs";
+import * as path from "path";
 
 import {
   getConsoleEntries,
@@ -9,15 +9,16 @@ import {
   getTestSteps,
   type NetworkEntry,
   type TestStep,
-} from './extractors';
+} from "./extractors";
 import {
   buildReportTraceMaps,
   getReportMetadata,
   getResourceBuffer,
+  normalizeTraceResourceReference,
   readNdjson,
   type ReportMetadata,
   type TraceContext,
-} from './parseTrace';
+} from "./parseTrace";
 import {
   CLI_JSON_SCHEMA_VERSION,
   type DigestCommandJson,
@@ -25,7 +26,7 @@ import {
   type DigestStepNode,
   type NetworkBodyLineJson,
   type NetworkLineJson,
-} from './cli/json';
+} from "./cli/json";
 
 /** Request or response bodies (text) larger than this are spilled into `network-bodies.ndjson`. */
 const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
@@ -34,25 +35,31 @@ const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function stripAnsi(value: string): string {
-  return value.replace(ANSI_PATTERN, '');
+  return value.replace(ANSI_PATTERN, "");
 }
 
 function sanitizeFolderName(value: string): string {
   const cleaned = value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return (cleaned || 'trace').slice(0, 80).replace(/-$/, '');
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (cleaned || "trace").slice(0, 80).replace(/-$/, "");
 }
 
 /** Sanitizes a callId (e.g. `pw:api@71`) into a filesystem-safe stem (`pw-api-71`). */
 function sanitizeCallId(callId: string): string {
-  return callId.replace(/[^a-zA-Z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return callId
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 /** Finds the trace's retry index by matching its SHA1 against report metadata. */
-function findRetryIndex(meta: ReportMetadata | null, traceSha1: string): number {
+function findRetryIndex(
+  meta: ReportMetadata | null,
+  traceSha1: string,
+): number {
   if (!meta) return 0;
   const maps = buildReportTraceMaps(meta);
   return maps.retryByTraceSha1.get(traceSha1) ?? 0;
@@ -80,7 +87,7 @@ function inStepWindow(step: TestStep, t: number | null): boolean {
 }
 
 function isBinaryBody(body: string | null): boolean {
-  return body !== null && body.startsWith('[binary:');
+  return body !== null && body.startsWith("[binary:");
 }
 
 /**
@@ -109,12 +116,20 @@ function buildNetworkLines(entries: NetworkEntry[]): {
 
     const requestBody = entry.requestBody;
     const requestBodyIsBinary = isBinaryBody(requestBody);
-    const requestBodySizeBytes = requestBody !== null ? Buffer.byteLength(requestBody, 'utf8') : 0;
-    const requestBodyIsLarge = !requestBodyIsBinary && requestBody !== null && requestBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+    const requestBodySizeBytes =
+      requestBody !== null ? Buffer.byteLength(requestBody, "utf8") : 0;
+    const requestBodyIsLarge =
+      !requestBodyIsBinary &&
+      requestBody !== null &&
+      requestBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
     const responseBody = entry.responseBody;
     const responseBodyIsBinary = isBinaryBody(responseBody);
-    const responseBodySizeBytes = responseBody !== null ? Buffer.byteLength(responseBody, 'utf8') : 0;
-    const responseBodyIsLarge = !responseBodyIsBinary && responseBody !== null && responseBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
+    const responseBodySizeBytes =
+      responseBody !== null ? Buffer.byteLength(responseBody, "utf8") : 0;
+    const responseBodyIsLarge =
+      !responseBodyIsBinary &&
+      responseBody !== null &&
+      responseBodySizeBytes > BODY_SPILL_THRESHOLD_BYTES;
 
     const line: NetworkLineJson = {
       seq,
@@ -144,13 +159,16 @@ function buildNetworkLines(entries: NetworkEntry[]): {
     lines.push(line);
 
     if (requestBodyIsLarge && requestBody !== null) {
-      const requestContentType = entry.requestHeaders.find(header => header.name.toLowerCase() === 'content-type')?.value ?? '';
+      const requestContentType =
+        entry.requestHeaders.find(
+          (header) => header.name.toLowerCase() === "content-type",
+        )?.value ?? "";
       bodies.push({
         seq,
-        direction: 'request',
+        direction: "request",
         url: entry.url,
         mimeType: requestContentType,
-        encoding: 'utf8',
+        encoding: "utf8",
         bodySizeBytes: requestBodySizeBytes,
         body: requestBody,
       });
@@ -159,10 +177,10 @@ function buildNetworkLines(entries: NetworkEntry[]): {
     if (responseBodyIsLarge && responseBody !== null) {
       bodies.push({
         seq,
-        direction: 'response',
+        direction: "response",
         url: entry.url,
         mimeType: entry.mimeType,
-        encoding: 'utf8',
+        encoding: "utf8",
         bodySizeBytes: responseBodySizeBytes,
         body: responseBody,
       });
@@ -174,28 +192,53 @@ function buildNetworkLines(entries: NetworkEntry[]): {
   return { lines, bodies, seqByEntry };
 }
 
-async function writeNdjson(filePath: string, records: unknown[]): Promise<void> {
-  const content = records.map(r => JSON.stringify(r)).join('\n');
-  await fs.promises.writeFile(filePath, records.length > 0 ? `${content}\n` : '', 'utf-8');
+async function writeNdjson(
+  filePath: string,
+  records: unknown[],
+): Promise<void> {
+  const content = records.map((r) => JSON.stringify(r)).join("\n");
+  await fs.promises.writeFile(
+    filePath,
+    records.length > 0 ? `${content}\n` : "",
+    "utf-8",
+  );
 }
 
 interface ScreencastFrame {
-  sha1: string;
+  file: string;
   timestamp: number;
   pageId: string;
 }
 
-/** Reads all screencast-frame events (sha1 + monotonic timestamp) across browser trace files. */
-async function readScreencastFrames(ctx: TraceContext): Promise<ScreencastFrame[]> {
+/** Reads all screencast-frame events across browser trace files. */
+async function readScreencastFrames(
+  ctx: TraceContext,
+): Promise<ScreencastFrame[]> {
   const files = await fs.promises.readdir(ctx.traceDir);
-  const traceFiles = files.filter(f => f.endsWith('.trace') && f !== 'test.trace').sort();
+  const traceFiles = files
+    .filter((f) => f.endsWith(".trace") && f !== "test.trace")
+    .sort();
   const frames: ScreencastFrame[] = [];
   for (const traceFile of traceFiles) {
-    for await (const event of readNdjson<{ type: string; sha1: string; timestamp: number; pageId: string }>(
-      path.join(ctx.traceDir, traceFile),
-    )) {
-      if (event.type === 'screencast-frame')
-        frames.push({ sha1: event.sha1, timestamp: event.timestamp, pageId: event.pageId });
+    for await (const event of readNdjson<{
+      type: string;
+      sha1?: string;
+      file?: string;
+      timestamp: number;
+      pageId: string;
+    }>(path.join(ctx.traceDir, traceFile))) {
+      if (event.type === "screencast-frame") {
+        const resourceFile = normalizeTraceResourceReference(
+          event.file,
+          event.sha1,
+        );
+        if (resourceFile)
+          frames.push({
+            file: resourceFile,
+            timestamp: event.timestamp,
+            pageId: event.pageId,
+          });
+      }
     }
   }
   frames.sort((a, b) => a.timestamp - b.timestamp);
@@ -203,7 +246,10 @@ async function readScreencastFrames(ctx: TraceContext): Promise<ScreencastFrame[
 }
 
 /** Returns the screencast frame whose timestamp is nearest `t`, or null when none exist. */
-function nearestFrame(frames: ScreencastFrame[], t: number): ScreencastFrame | null {
+function nearestFrame(
+  frames: ScreencastFrame[],
+  t: number,
+): ScreencastFrame | null {
   let best: ScreencastFrame | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const frame of frames) {
@@ -236,19 +282,27 @@ export async function writeTraceDigest(
   options?: { reportMetadata?: ReportMetadata | null },
 ): Promise<DigestCommandJson> {
   const resolvedOutputDir = path.resolve(outputDir);
-  const runDir = path.join(resolvedOutputDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  const runDir = path.join(
+    resolvedOutputDir,
+    `run-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+  );
 
   const traceSha1 = path.basename(ctx.traceDir);
-  const meta = options?.reportMetadata ?? (await getReportMetadata(ctx.reportDataDir ?? path.dirname(ctx.sourcePath ?? ctx.traceDir)));
+  const meta =
+    options?.reportMetadata ??
+    (await getReportMetadata(
+      ctx.reportDataDir ?? path.dirname(ctx.sourcePath ?? ctx.traceDir),
+    ));
   const reportTraceMaps = meta ? buildReportTraceMaps(meta) : null;
 
-  const [summary, roots, network, consoleEntries, domActions] = await Promise.all([
-    getSummary(ctx, { reportMetadata: meta, reportTraceMaps }),
-    getTestSteps(ctx),
-    getNetworkTraffic(ctx),
-    getConsoleEntries(ctx),
-    getDomSnapshots(ctx, { phase: 'action' }),
-  ]);
+  const [summary, roots, network, consoleEntries, domActions] =
+    await Promise.all([
+      getSummary(ctx, { reportMetadata: meta, reportTraceMaps }),
+      getTestSteps(ctx),
+      getNetworkTraffic(ctx),
+      getConsoleEntries(ctx),
+      getDomSnapshots(ctx, { phase: "action" }),
+    ]);
 
   const retryIndex = findRetryIndex(meta, traceSha1);
   const folderName = `${sanitizeFolderName(summary.testTitle ?? summary.title)}__retry${retryIndex}`;
@@ -256,24 +310,36 @@ export async function writeTraceDigest(
   await fs.promises.mkdir(folderDir, { recursive: true });
 
   // ---- Network NDJSON (chronological, global seq, large bodies spilled) ----
-  const { lines: networkLines, bodies: networkBodies, seqByEntry } = buildNetworkLines(network);
-  await writeNdjson(path.join(folderDir, 'network.ndjson'), networkLines);
+  const {
+    lines: networkLines,
+    bodies: networkBodies,
+    seqByEntry,
+  } = buildNetworkLines(network);
+  await writeNdjson(path.join(folderDir, "network.ndjson"), networkLines);
   if (networkBodies.length > 0)
-    await writeNdjson(path.join(folderDir, 'network-bodies.ndjson'), networkBodies);
+    await writeNdjson(
+      path.join(folderDir, "network-bodies.ndjson"),
+      networkBodies,
+    );
 
   // Pre-index network seq by time for fast per-step window queries. Prefer the
   // monotonic clock (matches step times in real traces); fall back to wall-clock
   // when monotonic is unavailable. A wall-clock epoch can never fall inside a
   // monotonic step window, so the fallback never produces false links.
   const networkByTime = networkLines
-    .map(l => ({ seq: l.seq, t: l.monotonicTime ?? Date.parse(l.startedDateTime) }))
-    .filter(n => Number.isFinite(n.t))
+    .map((l) => ({
+      seq: l.seq,
+      t: l.monotonicTime ?? Date.parse(l.startedDateTime),
+    }))
+    .filter((n) => Number.isFinite(n.t))
     .sort((a, b) => a.t - b.t);
 
   // ---- Console NDJSON (chronological, not linked) ----
-  const consoleSorted = [...consoleEntries].sort((a, b) => a.timestamp - b.timestamp);
-  await writeNdjson(path.join(folderDir, 'console.ndjson'), consoleSorted);
-  const consoleErrors = consoleSorted.filter(e => e.level === 'error');
+  const consoleSorted = [...consoleEntries].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+  await writeNdjson(path.join(folderDir, "console.ndjson"), consoleSorted);
+  const consoleErrors = consoleSorted.filter((e) => e.level === "error");
 
   // ---- DOM (Action phase) + screenshots, one per leaf action that has input@ ----
   const flat: FlatStep[] = [];
@@ -281,16 +347,19 @@ export async function writeTraceDigest(
 
   // Action-phase DOM snapshot timestamps (browser clock == step clock).
   const actionSnapshots = domActions
-    .map(a => a.action)
+    .map((a) => a.action)
     .filter((s): s is NonNullable<typeof s> => s !== null)
     .sort((a, b) => a.timestamp - b.timestamp);
 
   // Match each leaf step to the action snapshot whose timestamp is inside its window.
-  const domByStepCallId = new Map<string, { html: string; timestamp: number }>();
-  const usedSnapshots = new Set<typeof actionSnapshots[number]>();
+  const domByStepCallId = new Map<
+    string,
+    { html: string; timestamp: number }
+  >();
+  const usedSnapshots = new Set<(typeof actionSnapshots)[number]>();
   for (const { step, isLeaf } of flat) {
     if (!isLeaf) continue;
-    let chosen: typeof actionSnapshots[number] | null = null;
+    let chosen: (typeof actionSnapshots)[number] | null = null;
     for (const snap of actionSnapshots) {
       if (usedSnapshots.has(snap)) continue;
       if (inStepWindow(step, snap.timestamp)) {
@@ -300,19 +369,22 @@ export async function writeTraceDigest(
     }
     if (chosen) {
       usedSnapshots.add(chosen);
-      domByStepCallId.set(step.callId, { html: chosen.html, timestamp: chosen.timestamp });
+      domByStepCallId.set(step.callId, {
+        html: chosen.html,
+        timestamp: chosen.timestamp,
+      });
     }
   }
 
   // Write DOM html files.
   const domFileByStepCallId = new Map<string, string>();
   if (domByStepCallId.size > 0) {
-    const domDir = path.join(folderDir, 'dom');
+    const domDir = path.join(folderDir, "dom");
     await fs.promises.mkdir(domDir, { recursive: true });
     for (const [stepCallId, { html }] of domByStepCallId) {
       const stem = sanitizeCallId(stepCallId);
       const rel = `dom/${stem}.html`;
-      await fs.promises.writeFile(path.join(folderDir, rel), html, 'utf-8');
+      await fs.promises.writeFile(path.join(folderDir, rel), html, "utf-8");
       domFileByStepCallId.set(stepCallId, rel);
     }
   }
@@ -323,14 +395,14 @@ export async function writeTraceDigest(
   if (domByStepCallId.size > 0) {
     const frames = await readScreencastFrames(ctx);
     if (frames.length > 0) {
-      const screenshotsDir = path.join(folderDir, 'screenshots');
+      const screenshotsDir = path.join(folderDir, "screenshots");
       await fs.promises.mkdir(screenshotsDir, { recursive: true });
       for (const [stepCallId, { timestamp }] of domByStepCallId) {
         const frame = nearestFrame(frames, timestamp);
         if (!frame) continue;
-        const buf = await getResourceBuffer(ctx, frame.sha1);
+        const buf = await getResourceBuffer(ctx, frame.file);
         if (!buf) continue;
-        const ext = frame.sha1.endsWith('.jpeg') ? 'jpeg' : 'png';
+        const ext = frame.file.endsWith(".jpeg") ? "jpeg" : "png";
         const rel = `screenshots/${sanitizeCallId(stepCallId)}.${ext}`;
         await fs.promises.writeFile(path.join(folderDir, rel), buf);
         screenshotFileByStepCallId.set(stepCallId, rel);
@@ -344,10 +416,12 @@ export async function writeTraceDigest(
 
     // All network calls whose monotonic time falls in this step's window.
     const networkSeq = networkByTime
-      .filter(n => n.t >= step.startTime && n.t <= end)
-      .map(n => n.seq);
+      .filter((n) => n.t >= step.startTime && n.t <= end)
+      .map((n) => n.seq);
 
-    const consoleErrorCount = consoleErrors.filter(e => inStepWindow(step, e.timestamp)).length;
+    const consoleErrorCount = consoleErrors.filter((e) =>
+      inStepWindow(step, e.timestamp),
+    ).length;
 
     // dom/screenshot are only ever populated for leaf actions with an input@ snapshot.
     const dom = domFileByStepCallId.get(step.callId) ?? null;
@@ -365,7 +439,9 @@ export async function writeTraceDigest(
         ? {
             ...step.error,
             message: stripAnsi(step.error.message),
-            ...(step.error.stack !== undefined ? { stack: stripAnsi(step.error.stack) } : {}),
+            ...(step.error.stack !== undefined
+              ? { stack: stripAnsi(step.error.stack) }
+              : {}),
           }
         : null,
       artifacts: {
@@ -382,7 +458,7 @@ export async function writeTraceDigest(
 
   const folderJson: DigestFolderJson = {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
-    command: 'digest',
+    command: "digest",
     testTitle: summary.testTitle,
     title: summary.title,
     status: summary.status,
@@ -400,22 +476,22 @@ export async function writeTraceDigest(
       consoleEntries: consoleSorted.length,
     },
     files: {
-      network: 'network.ndjson',
-      networkBodies: networkBodies.length > 0 ? 'network-bodies.ndjson' : null,
-      console: 'console.ndjson',
+      network: "network.ndjson",
+      networkBodies: networkBodies.length > 0 ? "network-bodies.ndjson" : null,
+      console: "console.ndjson",
     },
     steps,
   };
 
   await fs.promises.writeFile(
-    path.join(folderDir, 'digest.json'),
+    path.join(folderDir, "digest.json"),
     `${JSON.stringify(folderJson, null, 2)}\n`,
-    'utf-8',
+    "utf-8",
   );
 
   return {
     schemaVersion: CLI_JSON_SCHEMA_VERSION,
-    command: 'digest',
+    command: "digest",
     outputDir: resolvedOutputDir,
     runDir,
     folder: folderName,

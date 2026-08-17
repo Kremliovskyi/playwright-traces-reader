@@ -128,7 +128,7 @@ Each `<runDir>/<folder>/` contains:
 - `error.md` — Playwright's human-readable error markdown, copied when present.
   The leading `# Instructions` preamble (generic "explain and fix the test"
   guidance) is stripped; the diagnostic sections (`# Test info`, `# Error
-  details`, etc.) are kept verbatim.
+details`, etc.) are kept verbatim.
 
 `failure.json` fields:
 
@@ -642,6 +642,7 @@ Important attachment fields:
 - `name`
 - `contentType`
 - `sha1`
+- `file` — canonical trace-relative resource path; additive in schema 2
 - `size`
 
 ### `attachment`
@@ -683,6 +684,7 @@ Payload field:
 Each screenshot item includes:
 
 - `sha1`
+- `file` — canonical trace-relative resource path; additive in schema 2
 - `timestamp`
 - `pageId`
 - `width`

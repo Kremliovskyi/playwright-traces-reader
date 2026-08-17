@@ -214,13 +214,13 @@ All trace files use **Newline-Delimited JSON (NDJSON)**.
 ## Quick Start
 
 ```typescript
-import {
-  getFailedTestSummaries,
-} from '@andrii_kremlovskyi/playwright-traces-reader';
+import { getFailedTestSummaries } from "@andrii_kremlovskyi/playwright-traces-reader";
 
 // One call — returns one TraceSummary per unique failing test.
 // Retries deduplicated; passing tests excluded; last retry selected.
-const failures = await getFailedTestSummaries('/path/to/playwright-report/data');
+const failures = await getFailedTestSummaries(
+  "/path/to/playwright-report/data",
+);
 
 for (const f of failures) {
   console.log(`[FAILED] ${f.testTitle ?? f.title}`);
@@ -232,7 +232,9 @@ for (const f of failures) {
   }
 
   if (f.failureDomSnapshot) {
-    console.log(`DOM ref: callId=${f.failureDomSnapshot.callId} phases=${f.failureDomSnapshot.phases}`);
+    console.log(
+      `DOM ref: callId=${f.failureDomSnapshot.callId} phases=${f.failureDomSnapshot.phases}`,
+    );
     // Use getDomSnapshots() with { near: f.failureDomSnapshot.callId } to fetch full HTML
   }
 }
@@ -245,13 +247,13 @@ import {
   prepareTraceDir,
   getReportMetadata,
   getSummary,
-} from '@andrii_kremlovskyi/playwright-traces-reader';
+} from "@andrii_kremlovskyi/playwright-traces-reader";
 
 // Point at a single extracted trace directory (or a .zip)
-const ctx = await prepareTraceDir('/path/to/playwright-report/data/<sha1>');
+const ctx = await prepareTraceDir("/path/to/playwright-report/data/<sha1>");
 
 // Load report metadata for outcome info (pass null if unavailable)
-const meta = await getReportMetadata('/path/to/playwright-report');
+const meta = await getReportMetadata("/path/to/playwright-report");
 
 // For a single trace, pass reportMetadata directly:
 const summary = await getSummary(ctx, { reportMetadata: meta });
@@ -259,7 +261,9 @@ const summary = await getSummary(ctx, { reportMetadata: meta });
 // For many traces, pre-build maps to avoid redundant work:
 // const maps = meta ? buildReportTraceMaps(meta) : null;
 // const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: maps });
-console.log(`[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`);
+console.log(
+  `[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`,
+);
 console.log(`Error: ${summary.error?.message}`);
 ```
 
@@ -275,14 +279,15 @@ Important distinction:
 ### `getFailedTestSummaries(reportDataDir, options?)`
 
 Report-level helper. Returns `TraceSummary[]` — one entry per **unique** failing test:
+
 - Passing tests are skipped cheaply (no `getSummary` call).
 - Retries are deduplicated by `testId` from `report.json` when `index.html` is available, falling back to `getTestTitle()` or `ctx.traceDir`. The **last retry** (highest root step `endTime`) is used so the summary reflects the most recent execution.
 - Each returned summary has an `outcome` field (`'unexpected'` | `'skipped'` | `'flaky'` | `null`) from `report.json`, so callers can filter or group by outcome.
 
 **`GetFailedTestSummariesOptions`** (optional second argument):
 
-| Option | Type | Default | Description |
-|---|---|---|---|
+| Option           | Type      | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `excludeSkipped` | `boolean` | `false` | Omit tests that were skipped via `test.skip()`. When `index.html` is found next to the `data/` directory, maps trace directories to test outcomes via `report.json` (each test result's trace attachment path contains the SHA1 directory name). Falls back to checking trace step annotations and error messages when `index.html` is not available. Pre-annotated skips (suite-level annotations or conditional `test.skip(condition)`) are already excluded automatically because they produce no root step failures. |
 
 This is the recommended entry point for failure analysis. See [`TraceSummary`](#tracesummary) for the full field list.
@@ -291,10 +296,10 @@ This is the recommended entry point for failure analysis. See [`TraceSummary`](#
 
 Builds a `TraceSummary` for a single `TraceContext`. Requires an `options: GetSummaryOptions` object:
 
-| Option | Type | Required | Description |
-|---|---|---|---|
-| `reportMetadata` | `ReportMetadata \| null` | Yes | Parsed report metadata from `getReportMetadata()`. When provided, `outcome` is populated from `report.json`. Pass `null` when unavailable. |
-| `reportTraceMaps` | `ReportTraceMaps \| null` | No | Pre-built lookup maps from `buildReportTraceMaps()`. Avoids rebuilding maps on every call when invoking `getSummary` in a loop. If omitted, maps are built on-the-fly. |
+| Option            | Type                      | Required | Description                                                                                                                                                            |
+| ----------------- | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reportMetadata`  | `ReportMetadata \| null`  | Yes      | Parsed report metadata from `getReportMetadata()`. When provided, `outcome` is populated from `report.json`. Pass `null` when unavailable.                             |
+| `reportTraceMaps` | `ReportTraceMaps \| null` | No       | Pre-built lookup maps from `buildReportTraceMaps()`. Avoids rebuilding maps on every call when invoking `getSummary` in a loop. If omitted, maps are built on-the-fly. |
 
 ### `listTraces(reportDataDir)`
 
@@ -316,39 +321,39 @@ Reads numbered trace files (`0-trace.trace`, …) for a `context-options` event 
 
 Returns the full step tree from `test.trace` as `TestStep[]`. Each step has:
 
-| Field | Type | Description |
-|---|---|---|
-| `callId` | `string` | Unique step identifier |
-| `title` | `string` | Human-readable step name |
-| `method` | `string` | API method if applicable |
-| `startTime` | `number` | Unix ms timestamp |
-| `endTime` | `number \| null` | Unix ms timestamp |
-| `durationMs` | `number \| null` | Wall-clock duration |
-| `error` | `TraceError \| null` | Error details if the step failed |
-| `annotations` | `StepAnnotation[]` | Step annotations (e.g. `{ type: 'skip' }` for skipped tests) |
-| `children` | `TestStep[]` | Nested child steps |
+| Field         | Type                 | Description                                                  |
+| ------------- | -------------------- | ------------------------------------------------------------ |
+| `callId`      | `string`             | Unique step identifier                                       |
+| `title`       | `string`             | Human-readable step name                                     |
+| `method`      | `string`             | API method if applicable                                     |
+| `startTime`   | `number`             | Unix ms timestamp                                            |
+| `endTime`     | `number \| null`     | Unix ms timestamp                                            |
+| `durationMs`  | `number \| null`     | Wall-clock duration                                          |
+| `error`       | `TraceError \| null` | Error details if the step failed                             |
+| `annotations` | `StepAnnotation[]`   | Step annotations (e.g. `{ type: 'skip' }` for skipped tests) |
+| `children`    | `TestStep[]`         | Nested child steps                                           |
 
 ### `getNetworkTraffic(ctx)`
 
 Returns `NetworkEntry[]` from all `*.network` trace files. Supports optional filters for `source`, `grep`, `method`, `status`, `failed`, `near`, and `limit`. Each entry includes:
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `number` | Per-trace request identifier used by `getNetworkRequest()` and the CLI `request` command |
-| `source` | `'api' \| 'browser'` | `'api'` = Playwright `APIRequestContext`; `'browser'` = XHR / navigation |
-| `pageId` | `string \| null` | Page identifier when the request belongs to a browser page |
-| `method` | `string` | HTTP method |
-| `url` | `string` | Request URL |
-| `status` | `number` | HTTP response status |
-| `statusText` | `string` | HTTP status text |
-| `requestHeaders` | `Array<{name,value}>` | Request headers |
-| `responseHeaders` | `Array<{name,value}>` | Response headers |
-| `requestBody` | `string \| null` | Resolved request body |
-| `responseBody` | `string \| null` | Resolved response body (binary → `[binary: ...]` placeholder) |
-| `mimeType` | `string` | Response content MIME type |
-| `startedDateTime` | `string` | ISO 8601 request start time |
-| `durationMs` | `number` | Total request duration |
-| `relatedAction` | `RelatedActionRef \| null` | Nearest correlated browser action for this request |
+| Field             | Type                       | Description                                                                              |
+| ----------------- | -------------------------- | ---------------------------------------------------------------------------------------- |
+| `id`              | `number`                   | Per-trace request identifier used by `getNetworkRequest()` and the CLI `request` command |
+| `source`          | `'api' \| 'browser'`       | `'api'` = Playwright `APIRequestContext`; `'browser'` = XHR / navigation                 |
+| `pageId`          | `string \| null`           | Page identifier when the request belongs to a browser page                               |
+| `method`          | `string`                   | HTTP method                                                                              |
+| `url`             | `string`                   | Request URL                                                                              |
+| `status`          | `number`                   | HTTP response status                                                                     |
+| `statusText`      | `string`                   | HTTP status text                                                                         |
+| `requestHeaders`  | `Array<{name,value}>`      | Request headers                                                                          |
+| `responseHeaders` | `Array<{name,value}>`      | Response headers                                                                         |
+| `requestBody`     | `string \| null`           | Resolved request body                                                                    |
+| `responseBody`    | `string \| null`           | Resolved response body (binary → `[binary: ...]` placeholder)                            |
+| `mimeType`        | `string`                   | Response content MIME type                                                               |
+| `startedDateTime` | `string`                   | ISO 8601 request start time                                                              |
+| `durationMs`      | `number`                   | Total request duration                                                                   |
+| `relatedAction`   | `RelatedActionRef \| null` | Nearest correlated browser action for this request                                       |
 
 ### `getNetworkRequest(ctx, requestId)`
 
@@ -386,41 +391,41 @@ Writes screencast frames from all `[N]-trace.trace` files to `outDir` as numbere
 
 Returns `ActionDomSnapshots[]` — one entry per browser action that has DOM snapshots. Each entry groups three phases:
 
-| Field | Type | Description |
-|---|---|---|
-| `callId` | `string` | Action identifier |
-| `before` | `DomSnapshot \| null` | DOM before the action |
+| Field    | Type                  | Description                             |
+| -------- | --------------------- | --------------------------------------- |
+| `callId` | `string`              | Action identifier                       |
+| `before` | `DomSnapshot \| null` | DOM before the action                   |
 | `action` | `DomSnapshot \| null` | DOM during the action (mid-interaction) |
-| `after` | `DomSnapshot \| null` | DOM after the action completed |
+| `after`  | `DomSnapshot \| null` | DOM after the action completed          |
 
 Each `DomSnapshot` contains:
 
-| Field | Type | Description |
-|---|---|---|
-| `html` | `string` | Full serialized HTML (back-references resolved, `<script>` stripped) |
-| `phase` | `'before' \| 'action' \| 'after'` | Snapshot phase |
-| `frameUrl` | `string` | URL of the frame at snapshot time |
-| `targetElement` | `string \| null` | `callId` of the action that targeted an element, or `null` |
-| `viewport` | `{ width: number; height: number }` | Viewport dimensions |
-| `timestamp` | `number` | Unix ms timestamp |
+| Field           | Type                                | Description                                                          |
+| --------------- | ----------------------------------- | -------------------------------------------------------------------- |
+| `html`          | `string`                            | Full serialized HTML (back-references resolved, `<script>` stripped) |
+| `phase`         | `'before' \| 'action' \| 'after'`   | Snapshot phase                                                       |
+| `frameUrl`      | `string`                            | URL of the frame at snapshot time                                    |
+| `targetElement` | `string \| null`                    | `callId` of the action that targeted an element, or `null`           |
+| `viewport`      | `{ width: number; height: number }` | Viewport dimensions                                                  |
+| `timestamp`     | `number`                            | Unix ms timestamp                                                    |
 
 **`DomSnapshotOptions`** (optional second argument):
 
-| Option | Type | Description |
-|---|---|---|
-| `near` | `'last' \| string` | `'last'` = last `limit` entries; any other string = window centred on that callId |
-| `phase` | `'before' \| 'action' \| 'after'` | Keep only entries where this phase is populated |
-| `limit` | `number` | Max entries to return (default 5 with `near: 'last'`; caps from beginning otherwise) |
+| Option  | Type                              | Description                                                                          |
+| ------- | --------------------------------- | ------------------------------------------------------------------------------------ |
+| `near`  | `'last' \| string`                | `'last'` = last `limit` entries; any other string = window centred on that callId    |
+| `phase` | `'before' \| 'action' \| 'after'` | Keep only entries where this phase is populated                                      |
+| `limit` | `number`                          | Max entries to return (default 5 with `near: 'last'`; caps from beginning otherwise) |
 
 ### `getTimeline(ctx)`
 
 Merges all event types into a single chronologically sorted `TimelineEntry[]`:
 
-| Field | Type | Description |
-|---|---|---|
-| `timestamp` | `number` | Wall-clock ms since epoch |
-| `type` | `'step' \| 'screenshot' \| 'dom' \| 'network'` | Event category |
-| `data` | (typed union) | Payload — cast based on `type` |
+| Field       | Type                                           | Description                    |
+| ----------- | ---------------------------------------------- | ------------------------------ |
+| `timestamp` | `number`                                       | Wall-clock ms since epoch      |
+| `type`      | `'step' \| 'screenshot' \| 'dom' \| 'network'` | Event category                 |
+| `data`      | (typed union)                                  | Payload — cast based on `type` |
 
 Steps are flattened (all nesting levels). Screenshots are `ScreenshotMetadata` (no `savedPath` — no disk writes).
 
@@ -428,20 +433,20 @@ Steps are flattened (all nesting levels). Screenshots are `ScreenshotMetadata` (
 
 The bundle returned by `getSummary()` and `getFailedTestSummaries()`:
 
-| Field | Type | Description |
-|---|---|---|
-| `testTitle` | `string \| null` | Full unique title from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces. |
-| `title` | `string` | Root `test.step()` title (failing step or longest non-hook step) |
-| `status` | `'passed' \| 'failed'` | Test pass/fail from trace data |
-| `outcome` | `'expected' \| 'unexpected' \| 'flaky' \| 'skipped' \| null` | Authoritative outcome from `report.json`. Populated when `reportMetadata` is passed to `getSummary()` or automatically by `getFailedTestSummaries()`. `null` when `reportMetadata` is `null` or trace SHA1 not found. |
-| `durationMs` | `number \| null` | Duration of the main root step |
-| `error` | `TraceError \| null` | Top-level error, or `null` if passed |
-| `topLevelSteps` | `TestStep[]` | Non-hook root steps (the visible `test.step()` blocks), each with `.children` |
-| `slowestSteps` | `TestStep[]` | Top 5 slowest steps across the full step tree |
-| `networkCalls` | `NetworkEntry[]` | All HTTP calls (`source: 'api'` = Node.js `APIRequestContext`; `source: 'browser'` = XHR / fetch / navigation) |
-| `issues` | `TraceIssue[]` | Step failures, page errors, and trace-level issues for the trace |
-| `actionDiagnostics` | `ActionDiagnosticSummary[]` | Aggregated request and issue counts grouped by related browser action |
-| `failureDomSnapshot` | `FailureDomSnapshotRef \| null` | Lightweight metadata reference (callId, phases, timestamp, frameUrl) to the DOM snapshot closest to the failure. Use `getDomSnapshots()` or the `dom` CLI command with `--near <callId>` to retrieve full HTML. `null` for passed traces or when no snapshots exist. |
+| Field                | Type                                                         | Description                                                                                                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `testTitle`          | `string \| null`                                             | Full unique title from `context-options` (spec path + describe + test name). Use for display. `null` for pure API traces.                                                                                                                                            |
+| `title`              | `string`                                                     | Root `test.step()` title (failing step or longest non-hook step)                                                                                                                                                                                                     |
+| `status`             | `'passed' \| 'failed'`                                       | Test pass/fail from trace data                                                                                                                                                                                                                                       |
+| `outcome`            | `'expected' \| 'unexpected' \| 'flaky' \| 'skipped' \| null` | Authoritative outcome from `report.json`. Populated when `reportMetadata` is passed to `getSummary()` or automatically by `getFailedTestSummaries()`. `null` when `reportMetadata` is `null` or trace SHA1 not found.                                                |
+| `durationMs`         | `number \| null`                                             | Duration of the main root step                                                                                                                                                                                                                                       |
+| `error`              | `TraceError \| null`                                         | Top-level error, or `null` if passed                                                                                                                                                                                                                                 |
+| `topLevelSteps`      | `TestStep[]`                                                 | Non-hook root steps (the visible `test.step()` blocks), each with `.children`                                                                                                                                                                                        |
+| `slowestSteps`       | `TestStep[]`                                                 | Top 5 slowest steps across the full step tree                                                                                                                                                                                                                        |
+| `networkCalls`       | `NetworkEntry[]`                                             | All HTTP calls (`source: 'api'` = Node.js `APIRequestContext`; `source: 'browser'` = XHR / fetch / navigation)                                                                                                                                                       |
+| `issues`             | `TraceIssue[]`                                               | Step failures, page errors, and trace-level issues for the trace                                                                                                                                                                                                     |
+| `actionDiagnostics`  | `ActionDiagnosticSummary[]`                                  | Aggregated request and issue counts grouped by related browser action                                                                                                                                                                                                |
+| `failureDomSnapshot` | `FailureDomSnapshotRef \| null`                              | Lightweight metadata reference (callId, phases, timestamp, frameUrl) to the DOM snapshot closest to the failure. Use `getDomSnapshots()` or the `dom` CLI command with `--near <callId>` to retrieve full HTML. `null` for passed traces or when no snapshots exist. |
 
 ### `getReportFailurePatterns(reportDataDir, options?)`
 
@@ -456,13 +461,14 @@ This uses the same retry-deduplication and optional skip-filtering rules as `get
 
 Returns the same `ReportFailurePatterns` shape, but starts from already prepared `FailedTraceSelection[]` values instead of rescanning a report directory. Use this when you have already called the internal selection flow and want to avoid repeating the trace scan.
 
-### `getResourceBuffer(ctx, sha1)`
+### `getResourceBuffer(ctx, reference)`
 
-Low-level helper. Resolves a SHA1 filename to a raw `Buffer` from `resources/`. Returns `null` if not found.
+Low-level helper. Resolves either a legacy bare resource name from `resources/` or a current trace-relative `file` / `_file` path. Paths are constrained to the trace root. Returns `null` if not found.
 
 ### `buildReportTraceMaps(meta)`
 
 Builds SHA1-keyed lookup maps from parsed `ReportMetadata`. Returns `ReportTraceMaps` with:
+
 - `outcomeByTraceSha1` — maps trace SHA1 to test outcome (`'expected'` | `'unexpected'` | `'flaky'` | `'skipped'`)
 - `testIdByTraceSha1` — maps trace SHA1 to test ID
 
@@ -481,16 +487,16 @@ Searches a Playwright HTML report for tests matching a name pattern and returns 
 
 Returns `FoundTrace[]` where each entry includes:
 
-| Field | Type | Description |
-|---|---|---|
-| `testTitle` | `string` | Full test title (path + describe + name) |
-| `testId` | `string` | Unique test identifier |
-| `projectName` | `string` | Playwright project name |
-| `file` | `string` | Test file path |
-| `outcome` | `string` | Test-level outcome from `report.json` |
-| `resultIndex` | `number` | Zero-based retry index |
-| `traceSha1` | `string` | Trace directory name |
-| `tracePath` | `string` | Absolute path to the trace in `data/` |
+| Field         | Type     | Description                              |
+| ------------- | -------- | ---------------------------------------- |
+| `testTitle`   | `string` | Full test title (path + describe + name) |
+| `testId`      | `string` | Unique test identifier                   |
+| `projectName` | `string` | Playwright project name                  |
+| `file`        | `string` | Test file path                           |
+| `outcome`     | `string` | Test-level outcome from `report.json`    |
+| `resultIndex` | `number` | Zero-based retry index                   |
+| `traceSha1`   | `string` | Trace directory name                     |
+| `tracePath`   | `string` | Absolute path to the trace in `data/`    |
 
 ### `readNdjson<T>(filePath)`
 

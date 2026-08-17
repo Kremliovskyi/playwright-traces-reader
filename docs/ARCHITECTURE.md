@@ -44,7 +44,9 @@ Typical contents of one extracted trace directory:
 ├── test.trace          step tree and root test flow
 ├── 0-trace.trace       browser context events, snapshots, screenshots, context-options
 ├── 0.network           request and response metadata
-└── resources/          blobs referenced by sha1
+├── resources/          legacy and network content blobs
+├── screencast/         current screencast frames
+└── attachments/        current attachment blobs
 ```
 
 Important file roles:
@@ -52,7 +54,7 @@ Important file roles:
 - `test.trace` contains `before` and `after` events used to reconstruct step trees, durations, and failures.
 - `[N]-trace.trace` contains browser context events such as `context-options`, `frame-snapshot`, `screencast-frame`, console entries, page errors, stdout/stderr, and action-level attachments.
 - `*.network` contains HAR-like `resource-snapshot` events for network traffic.
-- `resources/` stores request bodies, response bodies, and screenshot blobs.
+- Resource events use either legacy `sha1` / `_sha1` names under `resources/` or current `file` / `_file` paths relative to the trace root.
 
 All trace files are newline-delimited JSON.
 
@@ -98,7 +100,7 @@ This layer is responsible for:
 - resolving a trace directory from either a directory or a `.zip`
 - scanning a report `data/` directory for valid traces
 - reading NDJSON files as async streams
-- loading raw resource blobs by SHA1
+- loading raw resource blobs by legacy name or trace-relative path
 - loading report metadata from `index.html`
 - building lookup maps from report metadata
 - discovering trace paths for tests matching a name pattern from report metadata
@@ -108,7 +110,7 @@ Primary APIs:
 - `prepareTraceDir(tracePath)`
 - `listTraces(reportDataDir)`
 - `readNdjson(filePath)`
-- `getResourceBuffer(traceContext, sha1)`
+- `getResourceBuffer(traceContext, reference)`
 - `getReportMetadata(reportDir)`
 - `buildReportTraceMaps(meta)`
 - `findTraces(reportDir, grep, options?)` — searches report metadata for tests matching a name pattern and returns trace paths for all matching results including retries

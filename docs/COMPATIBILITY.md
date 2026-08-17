@@ -15,6 +15,8 @@ Compatibility is tracked at two levels:
 
 The parser currently validates trace schema version 8. A trace with a newer schema is rejected with `UnsupportedTraceVersionError` instead of being partially parsed. Multiple schema versions inside one trace are rejected with `InconsistentTraceVersionError`.
 
+Schema 8 has two resource-reference representations. Older producers use bare `sha1` / `_sha1` values whose blobs live under `resources/`; newer producers use `file` / `_file` paths relative to the trace root. Both representations are accepted and normalized to trace-relative paths. Resource paths are constrained to the trace root before they are read.
+
 The scheduled matrix validates:
 
 - Production baseline: Playwright 1.59.0.
@@ -29,7 +31,7 @@ The exact versions resolved from moving tags are recorded in each generated `pro
 
 - Trace schema and Playwright package versions.
 - Event counts by file and event type.
-- Every SHA-backed resource reference.
+- Every legacy SHA-backed or trace-relative resource reference.
 - References whose resource files are missing.
 
 Unknown additive event types are reported but not rejected. Malformed NDJSON always fails with its file and line number. ZIPs are extracted into an atomic content-addressed cache under `<os.tmpdir>/playwright-traces-reader/trace-cache`, so changed archive bytes cannot reuse a stale extraction and input reports are never modified. Concurrent readers share completed entries: same-process requests are deduplicated, cross-process publication verifies the winning destination, and transient Windows `EPERM` rename failures are retried. Live process leases suppress maintenance. By default, completed entries expire after 24 hours without access and staging entries after 1 hour; the two age policies are configurable or independently disabled. There is no size cap, and the entire cache may be deleted while no reader command or library consumer is running.
