@@ -97,6 +97,6 @@ rm ./tests/fixtures/real-reports/playwright-1.59.0.zip
 
 Review `provenance.json` inside the new archive. It records the resolved Playwright version, trace schema, producer revision, scenario names, and SHA-256 checksums for every parser input.
 
-Do not raise `MAX_SUPPORTED_TRACE_VERSION` merely because the Playwright package version changed. Change that limit only after a newer trace schema has been investigated, supported by the parser, and covered by compatibility tests. Playwright 1.61.1 still produces trace schema 8, so upgrading to it does not require changing the schema limit.
+Do not raise `MAX_SUPPORTED_TRACE_VERSION` merely because the Playwright package version changed. Change that limit only after a newer trace schema has been investigated, supported by the parser, and covered by compatibility tests. For example, Playwright 1.63.0-alpha-2026-08-24 introduced schema 9 by replacing `_apiRequest` with `_apiRequestRef`; the schema limit was raised only after the full command matrix passed against that producer's report.
 
 Do not automatically commit weekly canary reports. They are uploaded only when a compatibility lane fails.

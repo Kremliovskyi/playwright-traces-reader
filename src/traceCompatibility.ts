@@ -3,7 +3,7 @@ import * as path from "path";
 import { readNdjson } from "./ndjson";
 import { traceResourceExists, type TraceContext } from "./parseTrace";
 
-export const MAX_SUPPORTED_TRACE_VERSION = 8;
+export const MAX_SUPPORTED_TRACE_VERSION = 9;
 
 interface ContextOptionsEvent {
   type: "context-options";

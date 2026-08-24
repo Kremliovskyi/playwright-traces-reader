@@ -244,6 +244,7 @@ interface ResourceSnapshot {
   snapshot: {
     pageref?: string;
     _apiRequest?: boolean;
+    _apiRequestRef?: string;
     startedDateTime: string;
     time: number;
     _monotonicTime?: number;
@@ -370,7 +371,7 @@ export async function getTopLevelFailures(
 /**
  * Reads all *.network files in the trace directory and returns structured
  * network entries. Each entry is tagged as 'browser' (has pageref) or
- * 'api' (has _apiRequest, no pageref). Response and request bodies are
+ * 'api' (has no pageref). Response and request bodies are
  * resolved from the resources/ directory when a _sha1 reference exists.
  */
 export async function getNetworkTraffic(

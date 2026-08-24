@@ -100,14 +100,14 @@ describe("trace parsing", () => {
       );
       await fs.promises.writeFile(
         path.join(traceDir, "0-trace.trace"),
-        `${JSON.stringify({ type: "context-options", version: 9, playwrightVersion: "future" })}\n`,
+        `${JSON.stringify({ type: "context-options", version: 10, playwrightVersion: "future" })}\n`,
         "utf8",
       );
 
       await expect(prepareTraceDir(traceDir)).rejects.toMatchObject({
         name: "UnsupportedTraceVersionError",
-        traceVersion: 9,
-        maxSupportedVersion: 8,
+        traceVersion: 10,
+        maxSupportedVersion: 9,
       } satisfies Partial<UnsupportedTraceVersionError>);
     } finally {
       await fs.promises.rm(traceDir, { recursive: true, force: true });
@@ -209,8 +209,8 @@ describe("trace parsing", () => {
         [
           JSON.stringify({
             type: "context-options",
-            version: 8,
-            playwrightVersion: "1.63.0-alpha",
+            version: 9,
+            playwrightVersion: "1.63.0-alpha-2026-08-24",
           }),
           JSON.stringify({
             type: "before",
@@ -244,7 +244,7 @@ describe("trace parsing", () => {
         `${JSON.stringify({
           type: "resource-snapshot",
           snapshot: {
-            _apiRequest: true,
+            _apiRequestRef: "request-context@1",
             startedDateTime: "2026-08-17T00:00:00.000Z",
             time: 1,
             _monotonicTime: 1,
@@ -275,6 +275,7 @@ describe("trace parsing", () => {
       const network = await getNetworkTraffic(traceContext);
       expect(network).toHaveLength(1);
       expect(network[0]).toMatchObject({
+        source: "api",
         requestBody: '{"request":true}',
         responseBody: '{"response":true}',
       });
