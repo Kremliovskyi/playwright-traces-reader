@@ -962,7 +962,8 @@ interface RawFrameSnapshot {
   type: "frame-snapshot";
   snapshot: {
     callId: string;
-    snapshotName: string;
+    phase?: "before" | "action" | "after";
+    snapshotName?: string;
     pageId: string;
     frameId: string;
     frameUrl: string;
@@ -1041,13 +1042,23 @@ interface FrameSnapshotEntry {
   historyIndex: number;
 }
 
+function normalizeSnapshotName(
+  callId: string,
+  phase: "before" | "action" | "after" | undefined,
+  snapshotName: string | undefined,
+): string | null {
+  if (snapshotName) return snapshotName;
+  if (!phase) return null;
+  return `${phase === "action" ? "input" : phase}@${callId}`;
+}
+
 /**
  * Shared state for a single render pass, allowing `resolveSnapshotNode` to
  * recurse into child iframe snapshots and inline them.
  *
  * Playwright captures every frame (the main page and each child iframe) as its
- * own snapshot series keyed by `frameId`, all sharing the same `snapshotName`
- * for a given action (e.g. `before@call@98`). At capture time an iframe's `src`
+ * own snapshot series keyed by `frameId`, all sharing the same normalized
+ * action/phase key (e.g. `before@call@98`). At capture time an iframe's `src`
  * is rewritten to `/snapshot/<childFrameId>` and the trace viewer resolves it
  * lazily via a service worker. Since we produce a self-contained HTML file
  * instead, we resolve each child frame here and inline it as `srcdoc`.
@@ -1274,7 +1285,6 @@ export async function getDomSnapshots(
       const snap = event.snapshot;
 
       const {
-        snapshotName,
         callId,
         frameId,
         frameUrl,
@@ -1284,6 +1294,11 @@ export async function getDomSnapshots(
         html,
         isMainFrame,
       } = snap;
+      const snapshotName = normalizeSnapshotName(
+        callId,
+        snap.phase,
+        snap.snapshotName,
+      );
 
       // Append to per-frame history BEFORE anything else (so refs can point back to it)
       if (!frameHistory.has(frameId)) frameHistory.set(frameId, []);
@@ -1292,13 +1307,15 @@ export async function getDomSnapshots(
       const snapshotIndex = history.length - 1;
 
       // Index by snapshotName so parent frames can inline this child by name.
-      if (!frameSnapshotsByName.has(frameId))
-        frameSnapshotsByName.set(frameId, new Map());
-      frameSnapshotsByName
-        .get(frameId)!
-        .set(snapshotName, { html, historyIndex: snapshotIndex });
+      if (snapshotName) {
+        if (!frameSnapshotsByName.has(frameId))
+          frameSnapshotsByName.set(frameId, new Map());
+        frameSnapshotsByName
+          .get(frameId)!
+          .set(snapshotName, { html, historyIndex: snapshotIndex });
+      }
 
-      if (!isMainFrame) continue; // child frames are only inlined, never top-level entries
+      if (!isMainFrame || !snapshotName) continue; // child/unclassified frames are never top-level entries
 
       // Determine phase from snapshotName prefix
       let phase: "before" | "action" | "after";

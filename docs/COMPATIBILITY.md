@@ -17,7 +17,7 @@ The parser currently validates trace schema versions through 9. A trace with a n
 
 Schema 8 has two resource-reference representations. Older producers use bare `sha1` / `_sha1` values whose blobs live under `resources/`; newer producers use `file` / `_file` paths relative to the trace root. Both representations are accepted and normalized to trace-relative paths. Resource paths are constrained to the trace root before they are read.
 
-Schema 9 replaces the `_apiRequest` boolean on API resource snapshots with an `_apiRequestRef` string. Network source classification remains backward compatible: snapshots with `pageref` are browser requests, while snapshots without it are API requests.
+Schema 9 replaces the `_apiRequest` boolean on API resource snapshots with an `_apiRequestRef` string. Network source classification remains backward compatible: snapshots with `pageref` are browser requests, while snapshots without it are API requests. Newer schema 9 producers also identify DOM snapshots with separate `callId` and `phase` fields instead of the legacy `snapshotName`; both representations are accepted and normalized to the same action-phase key.
 
 The scheduled matrix validates:
 
