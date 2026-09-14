@@ -9,8 +9,10 @@ import {
   extractAttachment,
   extractScreenshots,
   getAttachments,
+  getDomSnapshots,
   getNetworkTraffic,
   getResourceBuffer,
+  getTestSteps,
   inspectTraceCompatibility,
   listTraces,
   prepareTraceDir,
@@ -100,14 +102,14 @@ describe("trace parsing", () => {
       );
       await fs.promises.writeFile(
         path.join(traceDir, "0-trace.trace"),
-        `${JSON.stringify({ type: "context-options", version: 10, playwrightVersion: "future" })}\n`,
+        `${JSON.stringify({ type: "context-options", version: 11, playwrightVersion: "future" })}\n`,
         "utf8",
       );
 
       await expect(prepareTraceDir(traceDir)).rejects.toMatchObject({
         name: "UnsupportedTraceVersionError",
-        traceVersion: 10,
-        maxSupportedVersion: 9,
+        traceVersion: 11,
+        maxSupportedVersion: 10,
       } satisfies Partial<UnsupportedTraceVersionError>);
     } finally {
       await fs.promises.rm(traceDir, { recursive: true, force: true });
@@ -174,161 +176,211 @@ describe("trace parsing", () => {
     }
   });
 
-  test("reads trace-relative resource references while retaining legacy resource lookup", async () => {
-    const traceDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "pwtr-relative-resources-"),
-    );
+  test.each([8, 9, 10])(
+    "reads schema %i actions and trace-relative resources while retaining legacy lookup",
+    async (traceVersion) => {
+      const traceDir = await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), "pwtr-relative-resources-"),
+      );
+      const stepId = "pw:api@1";
+      const callId = traceVersion >= 10 ? stepId : "call@1";
 
-    try {
-      await fs.promises.mkdir(path.join(traceDir, "resources"));
-      await fs.promises.mkdir(path.join(traceDir, "screencast"));
-      await fs.promises.mkdir(path.join(traceDir, "attachments"));
-      await fs.promises.writeFile(
-        path.join(traceDir, "resources", "request.json"),
-        '{"request":true}',
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "resources", "response.json"),
-        '{"response":true}',
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "screencast", "frame.jpeg"),
-        Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "attachments", "artifact.txt"),
-        "relative attachment",
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "test.trace"),
-        "",
-        "utf8",
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "0-trace.trace"),
-        [
-          JSON.stringify({
-            type: "context-options",
-            version: 9,
-            playwrightVersion: "1.63.0-alpha-2026-08-24",
-          }),
-          JSON.stringify({
-            type: "before",
-            callId: "call@1",
-            title: "relative resources",
-          }),
-          JSON.stringify({
-            type: "screencast-frame",
-            pageId: "page@1",
-            file: "screencast/frame.jpeg",
-            width: 100,
-            height: 50,
-            timestamp: 1,
-          }),
-          JSON.stringify({
-            type: "after",
-            callId: "call@1",
-            endTime: 2,
-            attachments: [
-              {
-                name: "artifact.txt",
-                contentType: "text/plain",
-                file: "attachments/artifact.txt",
-              },
-            ],
-          }),
-        ].join("\n") + "\n",
-      );
-      await fs.promises.writeFile(
-        path.join(traceDir, "0.network"),
-        `${JSON.stringify({
-          type: "resource-snapshot",
-          snapshot: {
-            _apiRequestRef: "request-context@1",
-            startedDateTime: "2026-08-17T00:00:00.000Z",
-            time: 1,
-            _monotonicTime: 1,
-            request: {
-              method: "POST",
-              url: "https://example.test/resource",
-              headers: [],
-              postData: {
-                mimeType: "application/json",
-                _file: "resources/request.json",
-              },
-            },
-            response: {
-              status: 422,
-              statusText: "Unprocessable Entity",
-              headers: [],
-              content: {
-                size: 17,
-                mimeType: "application/json",
-                _file: "resources/response.json",
-              },
-            },
-          },
-        })}\n`,
-      );
-
-      const traceContext = await prepareTraceDir(traceDir);
-      const network = await getNetworkTraffic(traceContext);
-      expect(network).toHaveLength(1);
-      expect(network[0]).toMatchObject({
-        source: "api",
-        requestBody: '{"request":true}',
-        responseBody: '{"response":true}',
-      });
-
-      const screenshots = await extractScreenshots(
-        traceContext,
-        path.join(traceDir, "output-screenshots"),
-      );
-      expect(screenshots).toHaveLength(1);
-      expect(screenshots[0]).toMatchObject({
-        sha1: "screencast/frame.jpeg",
-        file: "screencast/frame.jpeg",
-      });
-
-      const attachments = await getAttachments(traceContext);
-      expect(attachments).toHaveLength(1);
-      expect(attachments[0]).toMatchObject({
-        file: "attachments/artifact.txt",
-        size: 19,
-      });
-      const saved = await extractAttachment(
-        traceContext,
-        attachments[0]!.id,
-        path.join(traceDir, "artifact.txt"),
-      );
-      expect(await fs.promises.readFile(saved.savedPath, "utf8")).toBe(
-        "relative attachment",
-      );
-
-      const compatibility = await inspectTraceCompatibility(traceContext);
-      expect(compatibility.referencedResources).toEqual([
-        "attachments/artifact.txt",
-        "resources/request.json",
-        "resources/response.json",
-        "screencast/frame.jpeg",
-      ]);
-      expect(compatibility.missingResources).toEqual([]);
-
-      expect(
-        (await getResourceBuffer(traceContext, "request.json"))?.toString(
+      try {
+        await fs.promises.mkdir(path.join(traceDir, "resources"));
+        await fs.promises.mkdir(path.join(traceDir, "screencast"));
+        await fs.promises.mkdir(path.join(traceDir, "attachments"));
+        await fs.promises.writeFile(
+          path.join(traceDir, "resources", "request.json"),
+          '{"request":true}',
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "resources", "response.json"),
+          '{"response":true}',
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "screencast", "frame.jpeg"),
+          Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "attachments", "artifact.txt"),
+          "relative attachment",
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "test.trace"),
+          [
+            JSON.stringify({
+              type: "before",
+              callId: stepId,
+              title: "relative resources",
+              startTime: 1,
+            }),
+            JSON.stringify({ type: "after", callId: stepId, endTime: 2 }),
+          ].join("\n") + "\n",
           "utf8",
-        ),
-      ).toBe('{"request":true}');
-      await expect(
-        getResourceBuffer(traceContext, "../outside.txt"),
-      ).rejects.toThrow("Invalid trace resource path");
-      await expect(
-        getResourceBuffer(traceContext, "resources/../test.trace"),
-      ).rejects.toThrow("Invalid trace resource path");
-    } finally {
-      await fs.promises.rm(traceDir, { recursive: true, force: true });
-    }
-  });
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "0-trace.trace"),
+          [
+            JSON.stringify({
+              type: "context-options",
+              version: traceVersion,
+              playwrightVersion: "synthetic",
+            }),
+            JSON.stringify({
+              type: "before",
+              callId,
+              ...(traceVersion < 10 ? { stepId } : {}),
+              title: "relative resources",
+            }),
+            JSON.stringify({
+              type: "frame-snapshot",
+              snapshot: {
+                callId,
+                ...(traceVersion < 9
+                  ? { snapshotName: `input@${callId}` }
+                  : { phase: "action" }),
+                frameId: "frame@1",
+                frameUrl: "https://example.test/resource",
+                pageId: "page@1",
+                timestamp: 1,
+                viewport: { width: 100, height: 50 },
+                isMainFrame: true,
+                html: ["BUTTON", { __playwright_target__: callId }, "Submit"],
+                resourceOverrides: [],
+              },
+            }),
+            JSON.stringify({
+              type: "screencast-frame",
+              pageId: "page@1",
+              file: "screencast/frame.jpeg",
+              width: 100,
+              height: 50,
+              timestamp: 1,
+            }),
+            JSON.stringify({
+              type: "after",
+              callId,
+              endTime: 2,
+              attachments: [
+                {
+                  name: "artifact.txt",
+                  contentType: "text/plain",
+                  file: "attachments/artifact.txt",
+                },
+              ],
+            }),
+          ].join("\n") + "\n",
+        );
+        await fs.promises.writeFile(
+          path.join(traceDir, "0.network"),
+          `${JSON.stringify({
+            type: "resource-snapshot",
+            snapshot: {
+              _apiRequestRef: "request-context@1",
+              startedDateTime: "2026-08-17T00:00:00.000Z",
+              time: 1,
+              _monotonicTime: 1,
+              request: {
+                method: "POST",
+                url: "https://example.test/resource",
+                headers: [],
+                postData: {
+                  mimeType: "application/json",
+                  _file: "resources/request.json",
+                },
+              },
+              response: {
+                status: 422,
+                statusText: "Unprocessable Entity",
+                headers: [],
+                content: {
+                  size: 17,
+                  mimeType: "application/json",
+                  _file: "resources/response.json",
+                },
+              },
+            },
+          })}\n`,
+        );
+
+        const traceContext = await prepareTraceDir(traceDir);
+        const steps = await getTestSteps(traceContext);
+        expect(steps).toHaveLength(1);
+        expect(steps[0]).toMatchObject({
+          callId: stepId,
+          title: "relative resources",
+          durationMs: 1,
+        });
+        const snapshots = await getDomSnapshots(traceContext);
+        expect(snapshots).toHaveLength(1);
+        expect(snapshots[0]).toMatchObject({
+          callId,
+          action: {
+            callId,
+            snapshotName: `input@${callId}`,
+            html: expect.stringContaining("Submit"),
+            targetElement: callId,
+          },
+        });
+        const network = await getNetworkTraffic(traceContext);
+        expect(network).toHaveLength(1);
+        expect(network[0]).toMatchObject({
+          source: "api",
+          requestBody: '{"request":true}',
+          responseBody: '{"response":true}',
+        });
+
+        const screenshots = await extractScreenshots(
+          traceContext,
+          path.join(traceDir, "output-screenshots"),
+        );
+        expect(screenshots).toHaveLength(1);
+        expect(screenshots[0]).toMatchObject({
+          sha1: "screencast/frame.jpeg",
+          file: "screencast/frame.jpeg",
+        });
+
+        const attachments = await getAttachments(traceContext);
+        expect(attachments).toHaveLength(1);
+        expect(attachments[0]).toMatchObject({
+          file: "attachments/artifact.txt",
+          size: 19,
+        });
+        const saved = await extractAttachment(
+          traceContext,
+          attachments[0]!.id,
+          path.join(traceDir, "artifact.txt"),
+        );
+        expect(await fs.promises.readFile(saved.savedPath, "utf8")).toBe(
+          "relative attachment",
+        );
+
+        const compatibility = await inspectTraceCompatibility(traceContext);
+        expect(compatibility.traceVersion).toBe(traceVersion);
+        expect(compatibility.referencedResources).toEqual([
+          "attachments/artifact.txt",
+          "resources/request.json",
+          "resources/response.json",
+          "screencast/frame.jpeg",
+        ]);
+        expect(compatibility.missingResources).toEqual([]);
+
+        expect(
+          (await getResourceBuffer(traceContext, "request.json"))?.toString(
+            "utf8",
+          ),
+        ).toBe('{"request":true}');
+        await expect(
+          getResourceBuffer(traceContext, "../outside.txt"),
+        ).rejects.toThrow("Invalid trace resource path");
+        await expect(
+          getResourceBuffer(traceContext, "resources/../test.trace"),
+        ).rejects.toThrow("Invalid trace resource path");
+      } finally {
+        await fs.promises.rm(traceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("extracts ZIP traces atomically without modifying their source directory", async () => {
     const dataDir = await fs.promises.mkdtemp(
