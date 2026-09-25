@@ -29,6 +29,17 @@ Covered commands:
 - `attachments` and dependent `attachment`
 - `dom`, `timeline`, and `screenshots`
 
+The suite also generates fresh, browser-free reports using the pinned Playwright
+development dependency. A four-test serial group fails in case 4 on the initial
+attempt, then fails in case 2 on retry after that test initially passed. The
+regression checks actual attempt statuses, selects only the two failed attempts,
+and verifies that each has its own `error.md`. Both `on` and `retain-on-failure`
+trace modes are covered. Run only this regression with:
+
+```bash
+npm run test:real-fixture -- -t "serial retries"
+```
+
 ## Fresh reports
 
 Generate a report with any published Playwright version:
@@ -55,7 +66,7 @@ PWTR_COMPAT_REPORT=./tmp/compatibility-1.59.0/playwright-report \
   npm run compatibility:run
 ```
 
-The producer uses public `@playwright/test` APIs in an isolated temporary npm project. It does not add Playwright to this package's runtime dependencies or lockfile.
+The compatibility producer uses public `@playwright/test` APIs in an isolated temporary npm project. Its selected version does not change this package's runtime dependencies or the pinned development dependency used by the serial regression.
 
 ## Upgrading the production baseline
 

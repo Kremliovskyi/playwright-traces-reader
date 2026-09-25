@@ -6,7 +6,7 @@ import { assertSupportedTraceVersion } from "./traceCompatibility";
 import {
   ensureTraceCacheSession,
   getTraceCacheRoot,
-  touchTraceCacheEntry,
+  touchTraceCacheEntry
 } from "./traceCache";
 
 export { NdjsonParseError, readNdjson } from "./ndjson";
@@ -23,7 +23,7 @@ const pendingTraceExtractions = new Map<string, Promise<string>>();
 
 async function publishTraceCache(
   temporaryTraceDir: string,
-  finalTraceDir: string,
+  finalTraceDir: string
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -62,7 +62,7 @@ async function extractTraceZip(tracePath: string): Promise<string> {
   const extraction = (async () => {
     await fs.promises.mkdir(finalRoot, { recursive: true });
     const temporaryRoot = await fs.promises.mkdtemp(
-      path.join(cacheRoot, `${digest}-`),
+      path.join(cacheRoot, `${digest}-`)
     );
     const temporaryTraceDir = path.join(temporaryRoot, traceName);
 
@@ -75,7 +75,7 @@ async function extractTraceZip(tracePath: string): Promise<string> {
         recursive: true,
         force: true,
         maxRetries: 5,
-        retryDelay: 100,
+        retryDelay: 100
       });
     }
 
@@ -96,7 +96,7 @@ async function extractTraceZip(tracePath: string): Promise<string> {
  * If a .zip file is provided, it extracts it to a temporary directory.
  */
 export async function prepareTraceDir(
-  tracePath: string,
+  tracePath: string
 ): Promise<TraceContext> {
   const sourcePath = path.resolve(tracePath);
   const stat = await fs.promises.stat(sourcePath);
@@ -105,7 +105,7 @@ export async function prepareTraceDir(
     return {
       traceDir: sourcePath,
       sourcePath,
-      reportDataDir: path.dirname(sourcePath),
+      reportDataDir: path.dirname(sourcePath)
     };
   }
 
@@ -115,12 +115,12 @@ export async function prepareTraceDir(
     return {
       traceDir,
       sourcePath,
-      reportDataDir: path.dirname(sourcePath),
+      reportDataDir: path.dirname(sourcePath)
     };
   }
 
   throw new Error(
-    `Invalid trace path: ${sourcePath}. Must be a directory or .zip file.`,
+    `Invalid trace path: ${sourcePath}. Must be a directory or .zip file.`
   );
 }
 
@@ -130,7 +130,7 @@ export async function prepareTraceDir(
  */
 export function normalizeTraceResourceReference(
   file?: string,
-  legacySha1?: string,
+  legacySha1?: string
 ): string | null {
   if (file) return file;
   if (legacySha1) return `resources/${legacySha1}`;
@@ -143,7 +143,7 @@ export function normalizeTraceResourceReference(
  */
 function resolveTraceResourcePath(
   traceContext: TraceContext,
-  reference: string,
+  reference: string
 ): string | null {
   if (!reference || reference.includes("\0")) return null;
 
@@ -172,7 +172,7 @@ function resolveTraceResourcePath(
 
 export function traceResourceExists(
   traceContext: TraceContext,
-  reference: string,
+  reference: string
 ): boolean {
   const resourcePath = resolveTraceResourcePath(traceContext, reference);
   return resourcePath !== null && fs.existsSync(resourcePath);
@@ -180,7 +180,7 @@ export function traceResourceExists(
 
 export async function getResourceBuffer(
   traceContext: TraceContext,
-  reference: string,
+  reference: string
 ): Promise<Buffer | null> {
   const resourcePath = resolveTraceResourcePath(traceContext, reference);
   if (!resourcePath) return null;
@@ -204,10 +204,10 @@ export async function getResourceBuffer(
  * @param reportDataDir  Path to the `playwright-report/data/` directory.
  */
 export async function listTraces(
-  reportDataDir: string,
+  reportDataDir: string
 ): Promise<TraceContext[]> {
   const entries = await fs.promises.readdir(reportDataDir, {
-    withFileTypes: true,
+    withFileTypes: true
   });
 
   const tracePathsByName = new Map<string, string>();
@@ -290,7 +290,7 @@ export interface ReportMetadata {
  *          does not contain the expected template tag.
  */
 export async function getReportMetadata(
-  reportDir: string,
+  reportDir: string
 ): Promise<ReportMetadata | null> {
   // Accept both the report root and the data/ subdirectory.
   let htmlPath = path.join(reportDir, "index.html");
@@ -312,7 +312,23 @@ export async function getReportMetadata(
   const reportEntry = zip.getEntry("report.json");
   if (!reportEntry) return null;
 
-  return JSON.parse(zip.readAsText(reportEntry)) as ReportMetadata;
+  const metadata = JSON.parse(zip.readAsText(reportEntry)) as ReportMetadata;
+  for (const file of metadata.files) {
+    const detailsEntry = zip.getEntry(`${file.fileId}.json`);
+    if (!detailsEntry) continue;
+    const details = JSON.parse(
+      zip.readAsText(detailsEntry)
+    ) as ReportMetadata["files"][number];
+    const testsById = new Map(details.tests.map((test) => [test.testId, test]));
+    for (const test of file.tests) {
+      const results = testsById.get(test.testId)?.results;
+      for (const [resultIndex, result] of test.results.entries()) {
+        const status = results?.[resultIndex]?.status;
+        if (status !== undefined) result.status = status;
+      }
+    }
+  }
+  return metadata;
 }
 
 // ---------- Report trace maps ----------
@@ -384,12 +400,12 @@ export interface FoundTrace {
 export async function findTraces(
   reportDir: string,
   grep: string,
-  options?: { outcome?: string },
+  options?: { outcome?: string }
 ): Promise<FoundTrace[]> {
   const meta = await getReportMetadata(reportDir);
   if (!meta)
     throw new Error(
-      `Could not read report metadata from ${reportDir}. Is index.html present?`,
+      `Could not read report metadata from ${reportDir}. Is index.html present?`
     );
 
   const dataDir = await resolveDataDir(reportDir);
@@ -427,7 +443,7 @@ export async function findTraces(
               outcome: t.outcome,
               resultIndex: i,
               traceSha1: sha1,
-              tracePath,
+              tracePath
             });
           }
         }

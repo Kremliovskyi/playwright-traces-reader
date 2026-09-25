@@ -2,12 +2,13 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import AdmZip from "adm-zip";
 import {
+  getReportMetadata,
   inspectTraceCompatibility,
   MAX_SUPPORTED_TRACE_VERSION,
-  prepareTraceDir,
+  prepareTraceDir
 } from "../src";
 
 jest.setTimeout(60000);
@@ -53,7 +54,7 @@ const fixturePath = path.join(
   "tests",
   "fixtures",
   "real-reports",
-  "playwright-1.59.0.zip",
+  "playwright-1.59.0.zip"
 );
 
 let tempRoot: string;
@@ -68,7 +69,7 @@ async function runCli(args: string[]): Promise<CommandOutput> {
   }>((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: repositoryRoot,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
     let stderr = "";
@@ -80,13 +81,13 @@ async function runCli(args: string[]): Promise<CommandOutput> {
     });
     child.on("error", reject);
     child.on("close", (exitCode) =>
-      resolve({ exitCode: exitCode ?? 1, stdout, stderr }),
+      resolve({ exitCode: exitCode ?? 1, stdout, stderr })
     );
   });
 
   if (result.exitCode !== 0)
     throw new Error(
-      `CLI failed (${args.join(" ")}): ${result.stderr || result.stdout}`,
+      `CLI failed (${args.join(" ")}): ${result.stderr || result.stdout}`
     );
   const output = JSON.parse(result.stdout) as CommandOutput;
   expect(output.schemaVersion).toBe(2);
@@ -98,10 +99,10 @@ async function hashDirectory(rootDir: string): Promise<string> {
   const hash = crypto.createHash("sha256");
   const visit = async (directory: string): Promise<void> => {
     const entries = await fs.promises.readdir(directory, {
-      withFileTypes: true,
+      withFileTypes: true
     });
     for (const entry of entries.sort((left, right) =>
-      left.name.localeCompare(right.name),
+      left.name.localeCompare(right.name)
     )) {
       const absolutePath = path.join(directory, entry.name);
       const relativePath = path
@@ -125,8 +126,132 @@ async function sha256File(filePath: string): Promise<string> {
     .digest("hex");
 }
 
+test.each(["on", "retain-on-failure"])(
+  "serial retries preserve error.md with trace=%s",
+  async (trace) => {
+    const serialRoot = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "pwtr-serial-retries-")
+    );
+    try {
+      const playwrightPath = require.resolve("@playwright/test");
+      const playwrightCli = path.join(path.dirname(playwrightPath), "cli.js");
+      await fs.promises.writeFile(
+        path.join(serialRoot, "serial.spec.cjs"),
+        `const { test, expect } = require(${JSON.stringify(playwrightPath)});
+test.describe.serial('serial regression', () => {
+  test('case 1', async () => { expect(true).toBe(true); });
+  test('case 2', async ({}, testInfo) => {
+    expect(testInfo.retry, 'SERIAL_CASE_2_RETRY_FAILURE').toBe(0);
+  });
+  test('case 3', async () => { expect(true).toBe(true); });
+  test('case 4', async () => {
+    expect(false, 'SERIAL_CASE_4_INITIAL_FAILURE').toBe(true);
+  });
+});
+`
+      );
+      await fs.promises.writeFile(
+        path.join(serialRoot, "playwright.config.cjs"),
+        `module.exports = ${JSON.stringify({
+          testDir: serialRoot,
+          testMatch: "serial.spec.cjs",
+          workers: 1,
+          retries: 1,
+          use: { trace },
+          reporter: [
+            [
+              "html",
+              { outputFolder: path.join(serialRoot, "report"), open: "never" }
+            ],
+            ["json", { outputFile: path.join(serialRoot, "results.json") }]
+          ]
+        })};\n`
+      );
+      const env = { ...process.env };
+      delete env.JEST_WORKER_ID;
+      const run = spawnSync(process.execPath, [playwrightCli, "test"], {
+        cwd: serialRoot,
+        encoding: "utf8",
+        timeout: 30000,
+        env
+      });
+      expect(run.error).toBeUndefined();
+      expect(run.status).toBe(1);
+
+      const report = JSON.parse(
+        await fs.promises.readFile(
+          path.join(serialRoot, "results.json"),
+          "utf8"
+        )
+      );
+      expect(report.errors).toEqual([]);
+      const specs = report.suites[0].suites[0].specs;
+      expect(
+        specs.map(
+          (spec: { tests: Array<{ results: Array<{ status: string }> }> }) =>
+            spec.tests[0]!.results.map((result) => result.status)
+        )
+      ).toEqual([
+        ["passed", "passed"],
+        ["passed", "failed"],
+        ["passed", "skipped"],
+        ["failed", "skipped"]
+      ]);
+
+      const serialReport = path.join(serialRoot, "report");
+      const metadata = await getReportMetadata(serialReport);
+      const output = await runCli([
+        "failures",
+        serialReport,
+        path.join(serialRoot, "failures"),
+        "--exclude-skipped"
+      ]);
+      const failures = output.failures as Array<{
+        folder: string;
+        retryIndex: number;
+        traceSha1: string;
+      }>;
+      const attempts = failures.map((failure) => {
+        const test = metadata!.files
+          .flatMap((file) => file.tests)
+          .find((test) =>
+            test.results.some((result) =>
+              result.attachments.some(
+                (attachment) =>
+                  attachment.path === `data/${failure.traceSha1}.zip`
+              )
+            )
+          );
+        return `${test?.title}:${failure.retryIndex}`;
+      });
+      expect(attempts.sort()).toEqual(["case 2:1", "case 4:0"]);
+
+      for (const failure of failures) {
+        const folder = path.join(String(output.runDir), failure.folder);
+        const details = JSON.parse(
+          await fs.promises.readFile(path.join(folder, "failure.json"), "utf8")
+        );
+        expect(details.files.errorMarkdown).toBe("error.md");
+        const markdown = await fs.promises.readFile(
+          path.join(folder, "error.md"),
+          "utf8"
+        );
+        expect(markdown).toContain("# Error details");
+        expect(markdown).toContain(
+          failure.retryIndex === 1
+            ? "SERIAL_CASE_2_RETRY_FAILURE"
+            : "SERIAL_CASE_4_INITIAL_FAILURE"
+        );
+        expect(markdown).not.toContain("# Instructions");
+      }
+    } finally {
+      await fs.promises.rm(serialRoot, { recursive: true, force: true });
+    }
+  }
+);
+
 function flattenSteps(
-  steps: Array<Record<string, unknown>>,
+  steps: Array<Record<string, unknown>>
 ): Array<Record<string, unknown>> {
   const flattened: Array<Record<string, unknown>> = [];
   for (const step of steps) {
@@ -141,16 +266,16 @@ function flattenSteps(
 
 function expectReferencedFiles(
   rootDir: string,
-  references: Array<string | null>,
+  references: Array<string | null>
 ): void {
   for (const reference of references.filter(
-    (value): value is string => value !== null,
+    (value): value is string => value !== null
   ))
     expect(fs.existsSync(path.join(rootDir, reference))).toBe(true);
 }
 
 async function runCompatibilityMatrix(
-  runNumber: number,
+  runNumber: number
 ): Promise<MatrixFingerprint> {
   const outputRoot = path.join(tempRoot, `matrix-${runNumber}`);
   await fs.promises.mkdir(outputRoot, { recursive: true });
@@ -161,21 +286,21 @@ async function runCompatibilityMatrix(
   expect(
     traces
       .filter((trace) => trace.testTitle === "PWTR deterministic failure")
-      .map((trace) => trace.resultIndex),
+      .map((trace) => trace.resultIndex)
   ).toEqual([0, 1]);
   expect(
     traces
       .filter((trace) => trace.testTitle === "PWTR deterministic flaky")
-      .map((trace) => trace.resultIndex),
+      .map((trace) => trace.resultIndex)
   ).toEqual([0, 1]);
 
   const richTrace = traces.find(
-    (trace) => trace.testTitle === "PWTR rich passing trace",
+    (trace) => trace.testTitle === "PWTR rich passing trace"
   );
   const failedTrace = traces.find(
     (trace) =>
       trace.testTitle === "PWTR deterministic failure" &&
-      trace.resultIndex === 1,
+      trace.resultIndex === 1
   );
   if (!richTrace)
     throw new Error("Rich passing compatibility trace was not found.");
@@ -185,17 +310,17 @@ async function runCompatibilityMatrix(
   const failuresOutput = await runCli([
     "failures",
     reportRoot,
-    path.join(outputRoot, "failures"),
+    path.join(outputRoot, "failures")
   ]);
   const failures = failuresOutput.failures as Array<Record<string, unknown>>;
   expect(failures).toHaveLength(3);
   for (const failure of failures) {
     const failureDir = path.join(
       String(failuresOutput.runDir),
-      String(failure.folder),
+      String(failure.folder)
     );
     const failureJson = JSON.parse(
-      await fs.promises.readFile(path.join(failureDir, "failure.json"), "utf8"),
+      await fs.promises.readFile(path.join(failureDir, "failure.json"), "utf8")
     ) as {
       files: {
         networkErrors: string | null;
@@ -216,7 +341,7 @@ async function runCompatibilityMatrix(
         screenshotSet.before,
         screenshotSet.action,
         screenshotSet.after,
-        screenshotSet.dom,
+        screenshotSet.dom
       ]);
   }
 
@@ -224,7 +349,7 @@ async function runCompatibilityMatrix(
     "summary",
     richTrace.tracePath,
     "--report",
-    reportRoot,
+    reportRoot
   ]);
   const summary = summaryOutput.summary as {
     status: string;
@@ -233,7 +358,7 @@ async function runCompatibilityMatrix(
     issues: Array<{ source: string; message: string }>;
   };
   const topLevelStepTitles = summary.topLevelSteps.map((step) =>
-    String(step.title),
+    String(step.title)
   );
   expect(summary.status).toBe("passed");
   expect(summary.outcome).toBe("expected");
@@ -241,7 +366,7 @@ async function runCompatibilityMatrix(
     "PWTR_STEP_NAVIGATE",
     "PWTR_STEP_IFRAME",
     "PWTR_STEP_BROWSER_NETWORK",
-    "PWTR_STEP_API_NETWORK",
+    "PWTR_STEP_API_NETWORK"
   ]);
 
   const slowStepsOutput = await runCli([
@@ -250,13 +375,13 @@ async function runCompatibilityMatrix(
     "--report",
     reportRoot,
     "--limit",
-    "3",
+    "3"
   ]);
   expect(slowStepsOutput.count).toBe(3);
 
   const stepsOutput = await runCli(["steps", richTrace.tracePath]);
   const steps = flattenSteps(
-    stepsOutput.steps as Array<Record<string, unknown>>,
+    stepsOutput.steps as Array<Record<string, unknown>>
   );
   expect(steps.some((step) => step.title === "PWTR_STEP_IFRAME")).toBe(true);
 
@@ -275,36 +400,36 @@ async function runCompatibilityMatrix(
       (entry) =>
         entry.source === "browser" &&
         entry.status === 503 &&
-        entry.responseBody?.includes("PWTR_BROWSER_FAILURE"),
-    ),
+        entry.responseBody?.includes("PWTR_BROWSER_FAILURE")
+    )
   ).toBe(true);
   expect(
     networkEntries.some(
       (entry) =>
         entry.source === "api" &&
         entry.status === 422 &&
-        entry.requestBody?.includes("PWTR_API_REQUEST_BODY"),
-    ),
+        entry.requestBody?.includes("PWTR_API_REQUEST_BODY")
+    )
   ).toBe(true);
   expect(
     networkEntries.some(
       (entry) =>
         entry.source === "api" &&
-        entry.responseBody?.includes("PWTR_LARGE_BODY"),
-    ),
+        entry.responseBody?.includes("PWTR_LARGE_BODY")
+    )
   ).toBe(true);
   const detailedRequest = networkEntries.find(
-    (entry) => entry.source === "api" && entry.status === 422,
+    (entry) => entry.source === "api" && entry.status === 422
   );
   if (!detailedRequest)
     throw new Error("Detailed API compatibility request was not found.");
   const requestOutput = await runCli([
     "request",
     richTrace.tracePath,
-    String(detailedRequest.id),
+    String(detailedRequest.id)
   ]);
   expect(
-    (requestOutput.request as { responseBody: string }).responseBody,
+    (requestOutput.request as { responseBody: string }).responseBody
   ).toContain("PWTR_API_FAILURE");
 
   const consoleOutput = await runCli(["console", richTrace.tracePath]);
@@ -319,8 +444,8 @@ async function runCompatibilityMatrix(
       "PWTR_CONSOLE_WARNING",
       "PWTR_PAGE_ERROR",
       "PWTR_STDERR_MARKER",
-      "PWTR_STDOUT_MARKER",
-    ]),
+      "PWTR_STDOUT_MARKER"
+    ])
   );
 
   const errorsOutput = await runCli(["errors", richTrace.tracePath]);
@@ -332,7 +457,7 @@ async function runCompatibilityMatrix(
   }>;
   const issueMarkers = [
     ...(errorsOutput.errors as Array<{ message: string }>),
-    ...failedIssues,
+    ...failedIssues
   ]
     .map((issue) => issue.message)
     .filter((message) => message.includes("PWTR_"))
@@ -341,8 +466,8 @@ async function runCompatibilityMatrix(
   expect(
     failedIssues.some(
       (issue) =>
-        issue.source === "step" && issue.title === "PWTR_STEP_ALWAYS_FAILS",
-    ),
+        issue.source === "step" && issue.title === "PWTR_STEP_ALWAYS_FAILS"
+    )
   ).toBe(true);
 
   const attachmentsOutput = await runCli(["attachments", richTrace.tracePath]);
@@ -351,7 +476,7 @@ async function runCompatibilityMatrix(
     name: string;
   }>;
   const markerAttachment = attachments.find(
-    (attachment) => attachment.name === "pwtr-attachment.txt",
+    (attachment) => attachment.name === "pwtr-attachment.txt"
   );
   if (!markerAttachment)
     throw new Error("Compatibility attachment was not found.");
@@ -361,10 +486,10 @@ async function runCompatibilityMatrix(
     richTrace.tracePath,
     String(markerAttachment.id),
     "--output",
-    attachmentPath,
+    attachmentPath
   ]);
   expect(await fs.promises.readFile(attachmentPath, "utf8")).toContain(
-    "PWTR_ATTACHMENT_MARKER",
+    "PWTR_ATTACHMENT_MARKER"
   );
 
   const domPath = path.join(outputRoot, "dom.json");
@@ -372,7 +497,7 @@ async function runCompatibilityMatrix(
     "dom",
     richTrace.tracePath,
     "--output",
-    domPath,
+    domPath
   ]);
   expect(Number(domConfirmation.count)).toBeGreaterThan(0);
   const domOutput = JSON.parse(await fs.promises.readFile(domPath, "utf8")) as {
@@ -389,9 +514,9 @@ async function runCompatibilityMatrix(
   expect(
     domOutput.snapshots.some((snapshot) =>
       [snapshot.before, snapshot.action, snapshot.after].some(
-        (phase) => phase?.targetElement,
-      ),
-    ),
+        (phase) => phase?.targetElement
+      )
+    )
   ).toBe(true);
 
   const timelineOutput = await runCli(["timeline", richTrace.tracePath]);
@@ -400,11 +525,11 @@ async function runCompatibilityMatrix(
     type: string;
   }>;
   expect(new Set(timeline.map((entry) => entry.type))).toEqual(
-    new Set(["step", "network", "dom", "screenshot"]),
+    new Set(["step", "network", "dom", "screenshot"])
   );
   for (let index = 1; index < timeline.length; index++)
     expect(timeline[index]!.timestamp).toBeGreaterThanOrEqual(
-      timeline[index - 1]!.timestamp,
+      timeline[index - 1]!.timestamp
     );
 
   const screenshotDir = path.join(outputRoot, "screenshots");
@@ -412,7 +537,7 @@ async function runCompatibilityMatrix(
     "screenshots",
     richTrace.tracePath,
     "--out-dir",
-    screenshotDir,
+    screenshotDir
   ]);
   const screenshots = screenshotsOutput.screenshots as Array<{
     savedPath: string;
@@ -432,14 +557,14 @@ async function runCompatibilityMatrix(
     richTrace.tracePath,
     path.join(outputRoot, "digest"),
     "--report",
-    reportRoot,
+    reportRoot
   ]);
   const digestDir = path.join(
     String(digestOutput.runDir),
-    String(digestOutput.folder),
+    String(digestOutput.folder)
   );
   const digest = JSON.parse(
-    await fs.promises.readFile(path.join(digestDir, "digest.json"), "utf8"),
+    await fs.promises.readFile(path.join(digestDir, "digest.json"), "utf8")
   ) as {
     counts: {
       steps: number;
@@ -455,14 +580,14 @@ async function runCompatibilityMatrix(
   expectReferencedFiles(digestDir, [
     digest.files.network,
     digest.files.networkBodies,
-    digest.files.console,
+    digest.files.console
   ]);
   expect(digest.counts.networkCalls).toBe(networkEntries.length);
   expect(digest.counts.networkBodiesSpilled).toBeGreaterThan(0);
   const networkLines = (
     await fs.promises.readFile(
       path.join(digestDir, digest.files.network),
-      "utf8",
+      "utf8"
     )
   )
     .trim()
@@ -473,31 +598,31 @@ async function runCompatibilityMatrix(
           seq: number;
           requestBodyRef: number | null;
           responseBodyRef: number | null;
-        },
+        }
     );
   const bodyLines = (
     await fs.promises.readFile(
       path.join(digestDir, digest.files.networkBodies!),
-      "utf8",
+      "utf8"
     )
   )
     .trim()
     .split("\n")
     .map(
       (line) =>
-        JSON.parse(line) as { seq: number; direction: "request" | "response" },
+        JSON.parse(line) as { seq: number; direction: "request" | "response" }
     );
   const bodyReferences = new Set(
-    bodyLines.map((body) => `${body.seq}:${body.direction}`),
+    bodyLines.map((body) => `${body.seq}:${body.direction}`)
   );
   for (const networkLine of networkLines) {
     if (networkLine.requestBodyRef !== null)
       expect(bodyReferences.has(`${networkLine.requestBodyRef}:request`)).toBe(
-        true,
+        true
       );
     if (networkLine.responseBodyRef !== null)
       expect(
-        bodyReferences.has(`${networkLine.responseBodyRef}:response`),
+        bodyReferences.has(`${networkLine.responseBodyRef}:response`)
       ).toBe(true);
   }
   const digestSteps = flattenSteps(digest.steps);
@@ -515,14 +640,14 @@ async function runCompatibilityMatrix(
     const report = await inspectTraceCompatibility(traceContext);
     expect(report.traceVersion).not.toBeNull();
     expect(report.traceVersion).toBeLessThanOrEqual(
-      MAX_SUPPORTED_TRACE_VERSION,
+      MAX_SUPPORTED_TRACE_VERSION
     );
     expect(report.playwrightVersions).not.toEqual([]);
     expect(report.missingResources).toEqual([]);
     compatibility.push({
       traceVersion: report.traceVersion,
       playwrightVersions: report.playwrightVersions,
-      eventTypes: report.eventTypes,
+      eventTypes: report.eventTypes
     });
   }
 
@@ -530,7 +655,7 @@ async function runCompatibilityMatrix(
     traces: traces.map((trace) => ({
       title: trace.testTitle,
       outcome: trace.outcome,
-      retry: trace.resultIndex,
+      retry: trace.resultIndex
     })),
     failureRetries: failures
       .map((failure) => Number(failure.retryIndex))
@@ -538,13 +663,13 @@ async function runCompatibilityMatrix(
     summary: {
       status: summary.status,
       outcome: summary.outcome,
-      steps: topLevelStepTitles,
+      steps: topLevelStepTitles
     },
     network: networkEntries.map((entry) => ({
       source: entry.source,
       method: entry.method,
       pathname: new URL(entry.url).pathname,
-      status: entry.status,
+      status: entry.status
     })),
     consoleMarkers,
     issueMarkers,
@@ -561,25 +686,25 @@ async function runCompatibilityMatrix(
       digestSteps: digest.counts.steps,
       digestDom: digest.counts.leafActionsWithDom,
       digestScreenshots: digest.counts.screenshots,
-      digestConsole: digest.counts.consoleEntries,
+      digestConsole: digest.counts.consoleEntries
     },
-    compatibility,
+    compatibility
   };
 }
 
 beforeAll(async () => {
   if (!fs.existsSync(cliPath))
     throw new Error(
-      "dist/cli.js is missing. Run npm run build before compatibility tests.",
+      "dist/cli.js is missing. Run npm run build before compatibility tests."
     );
   tempRoot = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), "pwtr-real-compat-"),
+    path.join(os.tmpdir(), "pwtr-real-compat-")
   );
   reportRoot = path.join(tempRoot, "playwright-report");
   const externalReport = process.env.PWTR_COMPAT_REPORT;
   if (externalReport) {
     await fs.promises.cp(path.resolve(externalReport), reportRoot, {
-      recursive: true,
+      recursive: true
     });
   } else {
     if (!fs.existsSync(fixturePath))
@@ -588,8 +713,8 @@ beforeAll(async () => {
     const provenance = JSON.parse(
       await fs.promises.readFile(
         path.join(reportRoot, "provenance.json"),
-        "utf8",
-      ),
+        "utf8"
+      )
     ) as {
       resolvedPlaywrightVersion: string;
       traceVersions: number[];
@@ -598,10 +723,10 @@ beforeAll(async () => {
     expect(provenance.resolvedPlaywrightVersion).toBe("1.59.0");
     expect(provenance.traceVersions).toEqual([8]);
     for (const [relativePath, checksum] of Object.entries(
-      provenance.reportChecksums,
+      provenance.reportChecksums
     ))
       expect(await sha256File(path.join(reportRoot, relativePath))).toBe(
-        checksum,
+        checksum
       );
   }
   initialReportHash = await hashDirectory(reportRoot);
