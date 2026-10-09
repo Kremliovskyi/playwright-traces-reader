@@ -163,6 +163,13 @@ npx @andrii_kremlovskyi/playwright-traces-reader init-skills ./my-project
 
 This copies a `SKILL.md` template to `.github/skills/analyze-playwright-traces/SKILL.md`. The skill is CLI-first and points Copilot to supported `npx playwright-traces-reader ...` commands instead of temporary script generation.
 
+The template now covers local trace analysis only. Report discovery, vault notes
+and historical performance investigation are separate skills owned and installed
+by `playwright-reports` (`playwright-reports init-skills`). Refresh an existing
+trace skill with the command above to remove its old combined hub instructions.
+The `search-reports`, `prepare-report` and `vault-read` CLI commands remain
+available for backward compatibility.
+
 Like the other CLI commands, `init-skills` now returns JSON by default and supports `--format text` when a human-readable confirmation message is preferred.
 
 ## Library Integration
@@ -219,7 +226,7 @@ import { getFailedTestSummaries } from "@andrii_kremlovskyi/playwright-traces-re
 // One call — returns one TraceSummary per unique failing test.
 // Retries deduplicated; passing tests excluded; last retry selected.
 const failures = await getFailedTestSummaries(
-  "/path/to/playwright-report/data",
+  "/path/to/playwright-report/data"
 );
 
 for (const f of failures) {
@@ -233,7 +240,7 @@ for (const f of failures) {
 
   if (f.failureDomSnapshot) {
     console.log(
-      `DOM ref: callId=${f.failureDomSnapshot.callId} phases=${f.failureDomSnapshot.phases}`,
+      `DOM ref: callId=${f.failureDomSnapshot.callId} phases=${f.failureDomSnapshot.phases}`
     );
     // Use getDomSnapshots() with { near: f.failureDomSnapshot.callId } to fetch full HTML
   }
@@ -246,7 +253,7 @@ for (const f of failures) {
 import {
   prepareTraceDir,
   getReportMetadata,
-  getSummary,
+  getSummary
 } from "@andrii_kremlovskyi/playwright-traces-reader";
 
 // Point at a single extracted trace directory (or a .zip)
@@ -262,7 +269,7 @@ const summary = await getSummary(ctx, { reportMetadata: meta });
 // const maps = meta ? buildReportTraceMaps(meta) : null;
 // const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: maps });
 console.log(
-  `[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`,
+  `[${summary.status.toUpperCase()}] ${summary.testTitle ?? summary.title}`
 );
 console.log(`Error: ${summary.error?.message}`);
 ```
