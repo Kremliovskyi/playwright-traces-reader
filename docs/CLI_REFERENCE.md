@@ -206,7 +206,15 @@ Accepted inputs:
 
 Behavior:
 
-- passing tests are excluded
+- only explicit per-attempt `passed` statuses allow skipping ZIP reads,
+  extraction, and trace validation before preparation; an aggregate passing or
+  flaky test outcome never discards its failed attempts
+- missing per-attempt statuses and unreferenced traces use the existing
+  preparation/selection fallback, not an inferred early pass
+- unknown statuses, conflicting report summary/detail records, and traces
+  referenced by multiple attempts fail explicitly rather than silently dropping
+  evidence; normal `listTraces`, `digest`, and `summary` trace preparation is
+  unchanged
 - inclusion is gated on each attempt's `status` from `report.json` (`failed`,
   `timedOut`, `interrupted` are included; `skipped` is controlled by
   `--exclude-skipped`) — the same signal the HTML report uses, so attempts that

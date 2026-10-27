@@ -16,7 +16,8 @@ import {
 import {
   buildReportTraceMaps,
   getReportMetadata,
-  listTraces,
+  listTraceSources,
+  prepareTraceDir,
   type ReportMetadata,
   type TraceContext,
 } from './parseTrace';
@@ -48,6 +49,8 @@ interface FailureReportInfo {
   retryIndex: number;
   /** Per-result status from `report.json` (failed/passed/timedOut/skipped/interrupted). */
   status: string | null;
+  /** Only an explicit per-attempt pass permits skipping ZIP preparation. */
+  canSkipPreparation: boolean;
   /** Absolute path to Playwright's human-readable failure markdown, if present. */
   markdownPath: string | null;
 }
@@ -130,12 +133,12 @@ function buildFailureReportIndex(
       for (let retryIndex = 0; retryIndex < test.results.length; retryIndex++) {
         const result = test.results[retryIndex]!;
 
-        let traceSha1: string | null = null;
+        const traceSha1s = new Set<string>();
         let markdownPath: string | null = null;
 
         for (const att of result.attachments) {
           if (att.name === 'trace' && att.path)
-            traceSha1 = path.basename(att.path, '.zip');
+            traceSha1s.add(path.basename(att.path, '.zip'));
 
           const isMarkdown =
             att.contentType?.includes('markdown') ||
@@ -145,8 +148,16 @@ function buildFailureReportIndex(
             markdownPath = path.resolve(reportRootDir, att.path);
         }
 
-        if (traceSha1) {
+        for (const traceSha1 of traceSha1s) {
+          if (index.has(traceSha1))
+            throw new Error(
+              `Trace "${traceSha1}" is referenced by multiple report attempts. Cannot safely select failed attempts.`,
+            );
           let status = result.status ?? null;
+          if (status !== null && status !== 'passed' && status !== 'skipped' && !FAILING_RESULT_STATUSES.has(status))
+            throw new Error(
+              `Unsupported result status "${status}" for trace "${traceSha1}". Cannot safely select failed attempts.`,
+            );
           if (status === null) {
             if (test.outcome === 'skipped') {
               status = 'skipped';
@@ -163,6 +174,7 @@ function buildFailureReportIndex(
             outcome: test.outcome,
             retryIndex,
             status,
+            canSkipPreparation: result.status === 'passed',
             markdownPath: markdownPath && fs.existsSync(markdownPath) ? markdownPath : null,
           });
         }
@@ -344,7 +356,12 @@ export async function writeFailureDigests(
   const reportRootDir = path.dirname(path.resolve(reportDataDir));
   const reportIndex = meta ? buildFailureReportIndex(meta, reportRootDir) : null;
 
-  const traces = await listTraces(reportDataDir);
+  const sources = await listTraceSources(reportDataDir);
+  const traces = await Promise.all(
+    sources
+      .filter(({ traceName }) => !reportIndex?.get(traceName)?.canSkipPreparation)
+      .map(({ tracePath }) => prepareTraceDir(tracePath)),
+  );
   const usedFolderNames = new Set<string>();
   const manifestEntries: FailureManifestEntry[] = [];
 

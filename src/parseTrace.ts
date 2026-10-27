@@ -198,14 +198,13 @@ export async function getResourceBuffer(
  * execution. Each entry is either a directory or a `.zip` archive. Non-trace files
  * (`.md`, `.png`, `.json`, etc.) are ignored.
  *
- * Returns a `TraceContext` for every trace found, with `.zip` archives extracted
- * in-place (same directory, no suffix).
+ * Discovers trace sources without opening ZIPs or validating trace contents.
  *
  * @param reportDataDir  Path to the `playwright-report/data/` directory.
  */
-export async function listTraces(
+export async function listTraceSources(
   reportDataDir: string
-): Promise<TraceContext[]> {
+): Promise<Array<{ traceName: string; tracePath: string }>> {
   const entries = await fs.promises.readdir(reportDataDir, {
     withFileTypes: true
   });
@@ -232,8 +231,19 @@ export async function listTraces(
     }
   }
 
-  const tracePaths = [...tracePathsByName.values()].sort();
-  return Promise.all(tracePaths.map((tracePath) => prepareTraceDir(tracePath)));
+  return [...tracePathsByName]
+    .map(([traceName, tracePath]) => ({ traceName, tracePath }))
+    .sort((left, right) =>
+      left.tracePath < right.tracePath ? -1 : left.tracePath > right.tracePath ? 1 : 0
+    );
+}
+
+/** Prepares every discovered trace, materializing ZIPs in the trace cache. */
+export async function listTraces(
+  reportDataDir: string
+): Promise<TraceContext[]> {
+  const sources = await listTraceSources(reportDataDir);
+  return Promise.all(sources.map(({ tracePath }) => prepareTraceDir(tracePath)));
 }
 
 // ---------- Report metadata ----------
@@ -323,8 +333,28 @@ export async function getReportMetadata(
     for (const test of file.tests) {
       const results = testsById.get(test.testId)?.results;
       for (const [resultIndex, result] of test.results.entries()) {
-        const status = results?.[resultIndex]?.status;
-        if (status !== undefined) result.status = status;
+        const detailedResult = results?.[resultIndex];
+        const status = detailedResult?.status;
+        if (status === undefined || !detailedResult) continue;
+
+        const tracePaths = (value: ReportTestSummary["results"][number]) =>
+          value.attachments
+            .filter((attachment) => attachment.name === "trace" && attachment.path)
+            .map((attachment) => attachment.path!)
+            .sort();
+        const summaryTraces = tracePaths(result);
+        if (
+          summaryTraces.length &&
+          JSON.stringify(summaryTraces) !== JSON.stringify(tracePaths(detailedResult))
+        )
+          throw new Error(
+            `Trace attachments disagree between report.json and ${file.fileId}.json for test ${test.testId}, attempt ${resultIndex}. Cannot safely determine attempt status.`
+          );
+        if (result.status != null && result.status !== status)
+          throw new Error(
+            `Conflicting result statuses for test ${test.testId}, attempt ${resultIndex}: ${result.status} in report.json, ${status} in ${file.fileId}.json.`
+          );
+        result.status = status;
       }
     }
   }

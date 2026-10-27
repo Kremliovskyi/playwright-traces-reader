@@ -117,6 +117,15 @@ Primary APIs:
 
 `findTraces()` works entirely from report metadata embedded in `index.html`. It does not open or scan trace directories. The `grep` argument is always treated as a literal case-insensitive substring (not a regex) so that arbitrary test names — including brackets, parentheses, quotes, and non-Latin scripts — can be pasted directly without escaping. Unicode case folding is enabled via the `u` flag.
 
+Internally, `listTraceSources()` separates discovery from preparation while
+preserving path order and ZIP-over-directory precedence. `listTraces()` still
+prepares every source. `writeFailureDigests()` filters out explicit per-attempt
+passes before preparation, never using aggregate outcomes to do so. Missing
+statuses retain the existing fallback. The per-attempt index rejects unknown
+statuses and ambiguous trace-to-attempt mappings; metadata loading rejects
+conflicting summary/detail statuses or mismatched detail trace attachments.
+This keeps early filtering from borrowing a pass from another retry.
+
 #### Trace ZIP materialization cache
 
 `prepareTraceDir()` never extracts a ZIP beside the source report. It hashes the archive bytes with SHA-256 and materializes the trace under the operating system's temporary directory:

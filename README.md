@@ -98,7 +98,19 @@ self-contained folder per failed attempt (each failed retry included, no dedup) 
 `report.json` (`failed`, `timedOut`, `interrupted`; `skipped` honored by
 `--exclude-skipped`) — the same signal the HTML report uses — so attempts that aborted
 mid-step (error only on a child step, no root-step error) are still captured; without
-report metadata it falls back to scanning root-step failures. Each folder holds `failure.json` (title, step tree,
+report metadata it falls back to scanning root-step failures.
+
+Before opening trace ZIPs, `failures` excludes only attempts with an explicit
+`passed` status in the HTML report (including its per-file detail records).
+Test-level `expected`, `flaky`, and `ok` values are never used for this early
+optimization: failed retries, expected failures, timeouts, interruptions, and
+child-step-only failures remain candidates. Missing statuses or unreferenced
+traces retain the existing preparation and selection path. Unknown statuses,
+conflicting summary/detail records, or one trace referenced by multiple attempts
+produce an explicit error instead of silently omitting evidence. Known-passing
+trace contents are not validated; other trace-reading commands are unchanged.
+
+Each folder holds `failure.json` (title, step tree,
 slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot
 reference at failure — ANSI escape codes stripped from step/issue messages),
 already-extracted screenshots, the Action-phase DOM at each failure anchor

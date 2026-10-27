@@ -10,6 +10,19 @@ npm test
 
 These tests generate synthetic reports with fixed timestamps and identifiers. They cover parser edge cases, all CLI argument and filter behavior, report-hub HTTP contracts, malformed NDJSON, future trace versions, missing resources, and ZIP extraction freshness.
 
+`tests/failureDigest.test.ts` exercises early passed-attempt filtering against
+real synthetic ZIPs, including a 500-passing-archive case. It verifies exact
+archive read counts and unchanged failure manifests/evidence-file hashes, plus
+failed retries before and after a passing attempt, expected failures,
+timeouts/interruption, child-only errors, skipped attempts, missing metadata,
+multiple projects, and explicit errors for ambiguous or conflicting metadata.
+Known-passing corrupt archives are deliberately not opened; failed and unknown
+archives still surface extraction errors. To run this focused suite:
+
+```bash
+npx jest --runInBand tests/failureDigest.test.ts
+```
+
 ## Committed real report
 
 ```bash
