@@ -17,7 +17,7 @@ import {
   prepareTraceDir,
   findTraces,
 } from './index';
-import { writeFailureDigests } from './failureDigest';
+import { validateFailureWorkers, writeFailureDigests } from './failureDigest';
 import { writeTraceDigest } from './digestTrace';
 import {
   copySkillTemplate,
@@ -211,10 +211,12 @@ function buildProgram(io: CliIo): Command {
     .description('Digest failing tests into per-failure folders (json, screenshots, network/console errors) under outputDir')
     .option('-f, --format <format>', 'Output format: json or text', parseFormat, 'json')
     .option('--exclude-skipped', 'Exclude skipped tests from the result set', false)
-    .action(async (reportPath: string, outputDir: string, options: { format: OutputFormat; excludeSkipped: boolean }) => {
+    .option('--workers <count>', 'Preparation workers, from 1 to 5 (1 runs inline)', value => validateFailureWorkers(Number(value)), 4)
+    .action(async (reportPath: string, outputDir: string, options: { format: OutputFormat; excludeSkipped: boolean; workers: number }) => {
       const reportDataDir = await resolveReportDataDir(reportPath);
       const manifest = await writeFailureDigests(reportDataDir, outputDir, {
         excludeSkipped: options.excludeSkipped,
+        workers: options.workers,
       });
 
       emitOutput(io, options.format, manifest, formatFailuresText(manifest));

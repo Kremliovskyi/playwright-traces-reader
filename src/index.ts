@@ -49,6 +49,7 @@ export {
 } from "./extractors";
 
 export { writeFailureDigests } from "./failureDigest";
+export type { FailureDigestOptions } from "./failureDigest";
 export { writeTraceDigest } from "./digestTrace";
 
 export type {

@@ -3,14 +3,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
-import { runCli } from '../src/cli';
-import { writeFailureDigests } from '../src/failureDigest';
+import { runCli } from '../dist/cli';
+import { writeFailureDigests as writeDigests, type FailureDigestOptions } from '../dist/failureDigest';
 import { getReportMetadata, listTraces, type ReportMetadata } from '../src/parseTrace';
 import {
   cleanupSyntheticReportFixture,
   createSyntheticReportFixture,
   type SyntheticReportFixture,
 } from './syntheticReport';
+
+const writeFailureDigests = (dataDir: string, outputDir: string, options?: FailureDigestOptions) =>
+  writeDigests(dataDir, outputDir, { ...options, workers: 1 });
 
 async function artifactHashes(directory: string): Promise<Record<string, string>> {
   const hashes: Record<string, string> = {};

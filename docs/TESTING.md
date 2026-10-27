@@ -8,7 +8,11 @@ The trace compatibility suite is deterministic and does not use AI. It has three
 npm test
 ```
 
-These tests generate synthetic reports with fixed timestamps and identifiers. They cover parser edge cases, all CLI argument and filter behavior, report-hub HTTP contracts, malformed NDJSON, future trace versions, missing resources, and ZIP extraction freshness.
+The test command builds the package first so CLI and worker tests exercise the
+same compiled entry points shipped to consumers. These tests generate synthetic
+reports with fixed timestamps and identifiers. They cover parser edge cases, all
+CLI argument and filter behavior, report-hub HTTP contracts, malformed NDJSON,
+future trace versions, missing resources, and ZIP extraction freshness.
 
 `tests/failureDigest.test.ts` exercises early passed-attempt filtering against
 real synthetic ZIPs, including a 500-passing-archive case. It verifies exact
@@ -20,8 +24,17 @@ Known-passing corrupt archives are deliberately not opened; failed and unknown
 archives still surface extraction errors. To run this focused suite:
 
 ```bash
-npx jest --runInBand tests/failureDigest.test.ts
+npm run build && npx jest --runInBand tests/failureDigest.test.ts tests/failureWorkers.test.ts
 ```
+
+`tests/failureWorkers.test.ts` runs real processes at worker counts 3, 4, and 5
+against the sequential reference. It checks evidence-file hashes, manifest order,
+duplicate-title suffixes, bounded concurrent jobs and worker reuse, forced
+out-of-order completion, zero/one-candidate reports, 500 passing ZIPs, retries,
+shared-cache concurrent runs, invalid settings, extraction failures, and unexpected
+worker exits. Workers must close before a run resolves or rejects; failed runs
+must not leave partially published output or remove an existing run. The CLI
+default of four workers and its JSON/stdout contract are tested directly.
 
 ## Committed real report
 

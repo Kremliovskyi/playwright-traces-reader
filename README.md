@@ -94,7 +94,7 @@ Hub-assisted discovery details:
 
 `failures` is the primary triage command. It requires an `<outputDir>` and writes one
 self-contained folder per failed attempt (each failed retry included, no dedup) under
-`<outputDir>/run-<timestamp>/`. Inclusion is gated on each attempt's result `status` from
+`<outputDir>/run-<timestamp>-<unique-suffix>/`. Inclusion is gated on each attempt's result `status` from
 `report.json` (`failed`, `timedOut`, `interrupted`; `skipped` honored by
 `--exclude-skipped`) — the same signal the HTML report uses — so attempts that aborted
 mid-step (error only on a child step, no root-step error) are still captured; without
@@ -109,6 +109,21 @@ traces retain the existing preparation and selection path. Unknown statuses,
 conflicting summary/detail records, or one trace referenced by multiple attempts
 produce an explicit error instead of silently omitting evidence. Known-passing
 trace contents are not validated; other trace-reading commands are unchanged.
+
+Preparation uses four reusable worker processes by default. Each worker extracts
+one candidate trace into the cache and writes its complete evidence folder before
+taking another; there is no extract-everything-first barrier. Use `--workers 3`
+or `--workers 5` to tune the limit, or `--workers 1` for in-process sequential
+preparation. The library accepts the same setting as
+`writeFailureDigests(dataDir, outputDir, { workers: 4 })`.
+
+Manifest ordering, retry folders, duplicate-title suffixes, and evidence contents
+do not depend on completion order. The manifest is emitted only after all workers
+finish and exit. On a preparation error, no new jobs are dispatched; active jobs
+drain before the incomplete run is removed and the error is returned. Existing
+runs and source reports remain untouched. The limit is per invocation, so hosts
+running several reports should also bound their total preparation workload.
+This only prepares evidence; it does not invoke or change AI analysis.
 
 Each folder holds `failure.json` (title, step tree,
 slowest steps, API calls, issues, related-action diagnostics, and a DOM-snapshot

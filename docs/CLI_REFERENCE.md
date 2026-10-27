@@ -195,7 +195,7 @@ Digests failing tests into one self-contained folder per failed attempt.
 Usage:
 
 ```bash
-npx playwright-traces-reader failures <reportPath> <outputDir> [--exclude-skipped] [--format json|text]
+npx playwright-traces-reader failures <reportPath> <outputDir> [--workers 1|2|3|4|5] [--exclude-skipped] [--format json|text]
 ```
 
 Accepted inputs:
@@ -206,6 +206,12 @@ Accepted inputs:
 
 Behavior:
 
+- four reusable preparation processes by default; `--workers` accepts integers
+  from 1 to 5, with 1 running sequentially in the calling process
+- each process extracts and prepares one trace end-to-end before taking its next
+  job; work is not split into an all-extraction phase followed by all-digestion
+- worker count is a per-invocation limit; simultaneous invocations need an
+  additional host-level resource limit, especially on memory-constrained machines
 - only explicit per-attempt `passed` statuses allow skipping ZIP reads,
   extraction, and trace validation before preparation; an aggregate passing or
   flaky test outcome never discards its failed attempts
@@ -221,7 +227,11 @@ Behavior:
   aborted mid-step (error only on a child step, no root-step error) are still
   captured; without report metadata it falls back to scanning root-step failures
 - one folder is written per failed attempt, including each failed retry (no dedup)
-- folders are created under `<outputDir>/run-<timestamp>/`
+- folders are created under `<outputDir>/run-<timestamp>-<unique-suffix>/`
+- folder naming, duplicate-title suffixes, and manifest order remain deterministic
+  even when workers finish out of order
+- preparation errors stop new work, drain and close workers, remove the incomplete
+  run, and return a nonzero exit code without success JSON; existing runs are kept
 - each folder contains `failure.json` plus `screenshots/`, the Action-phase DOM at
   each failure anchor (`dom/<callId>.html`, referenced from `failure.json`),
   `network-errors.ndjson` (one record per line, per-anchor timing, request and response
@@ -238,6 +248,7 @@ Examples:
 npx playwright-traces-reader failures ./playwright-report ./trace-analysis
 npx playwright-traces-reader failures ./playwright-report ./trace-analysis --exclude-skipped
 npx playwright-traces-reader failures ./playwright-report ./trace-analysis --format text
+npx playwright-traces-reader failures ./playwright-report ./trace-analysis --workers 3
 ```
 
 ## `find-traces`

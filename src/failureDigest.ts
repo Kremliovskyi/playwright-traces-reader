@@ -19,8 +19,11 @@ import {
   listTraceSources,
   prepareTraceDir,
   type ReportMetadata,
+  type ReportTraceMaps,
   type TraceContext,
 } from './parseTrace';
+import { runFailureWorkers } from './failureWorkerPool';
+import { startTraceCacheSession } from './traceCache';
 import {
   CLI_JSON_SCHEMA_VERSION,
   type FailureFolderJson,
@@ -43,6 +46,17 @@ const BODY_SPILL_THRESHOLD_BYTES = 32 * 1024;
  */
 const FAILING_RESULT_STATUSES = new Set(['failed', 'timedOut', 'interrupted']);
 
+export interface FailureDigestOptions extends GetFailedTestSummariesOptions {
+  /** Preparation processes per run, from 1 to 5. Defaults to 4; 1 runs inline. */
+  workers?: number;
+}
+
+export function validateFailureWorkers(workers: number): number {
+  if (!Number.isInteger(workers) || workers < 1 || workers > 5)
+    throw new Error('Failure preparation workers must be an integer from 1 to 5.');
+  return workers;
+}
+
 /** Per-trace metadata gathered from the HTML report's `report.json`. */
 interface FailureReportInfo {
   outcome: 'expected' | 'unexpected' | 'flaky' | 'skipped' | null;
@@ -53,6 +67,17 @@ interface FailureReportInfo {
   canSkipPreparation: boolean;
   /** Absolute path to Playwright's human-readable failure markdown, if present. */
   markdownPath: string | null;
+}
+
+export interface FailureDigestTask {
+  tracePath: string;
+  info: FailureReportInfo | null;
+  folderDir: string;
+}
+
+export interface FailureWorkerInit {
+  metadata: ReportMetadata | null;
+  excludeSkipped: boolean;
 }
 
 // eslint-disable-next-line no-control-regex
@@ -340,111 +365,116 @@ async function writeNdjson(filePath: string, records: unknown[]): Promise<void> 
  *
  * @param reportDataDir  Path to the report `data/` directory.
  * @param outputDir      Directory to write the run folder into (created if missing).
- * @param options        Optional filtering (e.g. `excludeSkipped`).
+ * @param options        Filtering and preparation worker count (default 4).
  */
 export async function writeFailureDigests(
   reportDataDir: string,
   outputDir: string,
-  options?: GetFailedTestSummariesOptions,
+  options?: FailureDigestOptions,
 ): Promise<FailuresCommandJson> {
+  const workers = validateFailureWorkers(options?.workers ?? 4);
   const resolvedOutputDir = path.resolve(outputDir);
-  const runDir = path.join(resolvedOutputDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-  await fs.promises.mkdir(runDir, { recursive: true });
-
   const meta = await getReportMetadata(reportDataDir);
-  const traceMaps = meta ? buildReportTraceMaps(meta) : null;
   const reportRootDir = path.dirname(path.resolve(reportDataDir));
   const reportIndex = meta ? buildFailureReportIndex(meta, reportRootDir) : null;
-
   const sources = await listTraceSources(reportDataDir);
-  const traces = await Promise.all(
-    sources
-      .filter(({ traceName }) => !reportIndex?.get(traceName)?.canSkipPreparation)
-      .map(({ tracePath }) => prepareTraceDir(tracePath)),
+  await fs.promises.mkdir(resolvedOutputDir, { recursive: true });
+  const runDir = await fs.promises.mkdtemp(
+    path.join(resolvedOutputDir, `run-${new Date().toISOString().replace(/[:.]/g, '-')}-`),
   );
-  const usedFolderNames = new Set<string>();
-  const manifestEntries: FailureManifestEntry[] = [];
+  const cacheSession = await startTraceCacheSession();
+  try {
+    const tasks: FailureDigestTask[] = sources
+      .filter(({ traceName }) => !reportIndex?.get(traceName)?.canSkipPreparation)
+      .map(({ traceName, tracePath }, index) => ({
+        tracePath,
+        info: reportIndex?.get(traceName) ?? null,
+        folderDir: path.join(runDir, `.attempt-${index}`),
+      }));
+    const init: FailureWorkerInit = { metadata: meta, excludeSkipped: options?.excludeSkipped ?? false };
+    const entries: Array<FailureManifestEntry | null> = [];
+    if (workers === 1) {
+      const traceMaps = meta ? buildReportTraceMaps(meta) : null;
+      for (const task of tasks)
+        entries.push(await prepareFailureDigest(task, init, traceMaps));
+    } else {
+      entries.push(...await runFailureWorkers(tasks, init, workers));
+    }
 
-  for (const ctx of traces) {
-    const traceSha1 = path.basename(ctx.traceDir);
-    const info = reportIndex?.get(traceSha1) ?? null;
-    const status = info?.status ?? null;
+    const usedFolderNames = new Set<string>();
+    const manifestEntries: FailureManifestEntry[] = [];
+    // Publish in source order, not completion order, so duplicate-title suffixes
+    // and downstream AI input ordering are independent of worker scheduling.
+    for (const [index, entry] of entries.entries()) {
+      if (!entry) continue;
+      const folder = uniqueFolderName(
+        `${sanitizeFolderName(entry.testTitle ?? entry.title)}__retry${entry.retryIndex}`,
+        usedFolderNames,
+      );
+      await fs.promises.rename(tasks[index]!.folderDir, path.join(runDir, folder));
+      manifestEntries.push({ ...entry, folder });
+    }
+    const manifest: FailuresCommandJson = {
+      schemaVersion: CLI_JSON_SCHEMA_VERSION,
+      command: 'failures',
+      outputDir: resolvedOutputDir,
+      runDir,
+      count: manifestEntries.length,
+      failures: manifestEntries,
+    };
+    await fs.promises.writeFile(
+      path.join(runDir, 'index.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf-8',
+    );
+    return manifest;
+  } catch (error) {
+    try {
+      await fs.promises.rm(runDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (cleanupError) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\nFailed to clean incomplete run ${runDir}: ${cleanupError}`);
+    }
+    throw error;
+  } finally {
+    await cacheSession.close();
+  }
+}
 
-    // Decide whether this trace represents a failure worth digesting.
-    //
-    // Prefer the report's authoritative per-result status (from `report.json`) —
-    // the same signal the HTML report uses. Crucially, it also catches tests
-    // aborted mid-step whose error never propagated up to a root step. For
-    // example, a `waitForResponse` timeout inside a `toPass` block leaves the
-    // failing root step without an `after` event, so `getTopLevelFailures()`
-    // returns nothing and the failure would otherwise be silently dropped.
-    //
-    // Fall back to scanning root-level step errors only when no report metadata
-    // is available for this trace (e.g. a bare trace directory).
-    let shouldInclude: boolean;
+export async function prepareFailureDigest(
+  task: FailureDigestTask,
+  init: FailureWorkerInit,
+  traceMaps: ReportTraceMaps | null,
+): Promise<FailureManifestEntry | null> {
+  try {
+    const ctx = await prepareTraceDir(task.tracePath);
+    const status = task.info?.status ?? null;
+    // Result status retains failures aborted before a root-step error exists.
+    // Legacy traces without metadata keep the existing root-error fallback.
     if (status !== null) {
-      if (FAILING_RESULT_STATUSES.has(status))
-        shouldInclude = true;
-      else if (status === 'skipped')
-        shouldInclude = !options?.excludeSkipped;
-      else
-        shouldInclude = false;
+      if (!FAILING_RESULT_STATUSES.has(status) && !(status === 'skipped' && !init.excludeSkipped))
+        return null;
     } else {
       const topFailures = await getTopLevelFailures(ctx);
-      if (topFailures.length === 0) {
-        shouldInclude = false;
-      } else if (options?.excludeSkipped) {
-        const isSkipped = topFailures.every(
-          f =>
-            f.annotations.some(a => a.type === 'skip') ||
-            f.error?.message?.includes('Test is skipped:'),
-        );
-        shouldInclude = !isSkipped;
-      } else {
-        shouldInclude = true;
-      }
+      if (!topFailures.length) return null;
+      if (init.excludeSkipped && topFailures.every(
+        f => f.annotations.some(a => a.type === 'skip') || f.error?.message?.includes('Test is skipped:'),
+      ))
+        return null;
     }
-    if (!shouldInclude)
-      continue;
-
-    const summary = await getSummary(ctx, { reportMetadata: meta, reportTraceMaps: traceMaps });
-    const retryIndex = info?.retryIndex ?? 0;
-
-    const folderName = uniqueFolderName(
-      `${sanitizeFolderName(summary.testTitle ?? summary.title)}__retry${retryIndex}`,
-      usedFolderNames,
-    );
-    const folderDir = path.join(runDir, folderName);
-    await fs.promises.mkdir(folderDir, { recursive: true });
-
-    const entry = await writeSingleFailure({
+    const summary = await getSummary(ctx, { reportMetadata: init.metadata, reportTraceMaps: traceMaps });
+    await fs.promises.mkdir(task.folderDir);
+    return await writeSingleFailure({
       ctx,
       summary,
-      traceSha1,
-      retryIndex,
-      folderDir,
-      folderName,
-      markdownPath: info?.markdownPath ?? null,
+      traceSha1: path.basename(ctx.traceDir),
+      retryIndex: task.info?.retryIndex ?? 0,
+      folderDir: task.folderDir,
+      folderName: path.basename(task.folderDir),
+      markdownPath: task.info?.markdownPath ?? null,
     });
-    manifestEntries.push(entry);
+  } catch (error) {
+    throw new Error(`Failed to prepare trace ${task.tracePath}: ${error instanceof Error ? error.message : String(error)}`);
   }
-
-  const manifest: FailuresCommandJson = {
-    schemaVersion: CLI_JSON_SCHEMA_VERSION,
-    command: 'failures',
-    outputDir: resolvedOutputDir,
-    runDir,
-    count: manifestEntries.length,
-    failures: manifestEntries,
-  };
-
-  await fs.promises.writeFile(
-    path.join(runDir, 'index.json'),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    'utf-8',
-  );
-
-  return manifest;
 }
 
 function uniqueFolderName(base: string, used: Set<string>): string {

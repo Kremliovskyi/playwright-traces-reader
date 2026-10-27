@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { runCli } from "../src/cli";
+import { runCli } from "../dist/cli";
 import type { NetworkErrorEntryJson, NetworkLineJson } from "../src/cli/json";
 import {
   cleanupSyntheticReportFixture,

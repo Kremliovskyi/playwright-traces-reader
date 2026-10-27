@@ -126,6 +126,23 @@ statuses and ambiguous trace-to-attempt mappings; metadata loading rejects
 conflicting summary/detail statuses or mismatched detail trace attachments.
 This keeps early filtering from borrowing a pass from another retry.
 
+`writeFailureDigests()` defaults to four reusable child processes managed by
+`failureWorkerPool.ts`; `failureDigestWorker.ts` is the compiled worker entry
+point included in the published package. Metadata is sent once per process.
+Workers independently extract, parse, and write one trace at a time into private
+`.attempt-<index>` staging folders, returning only compact manifest entries.
+The parent assigns final names and publishes entries in sorted source order after
+all workers exit. The run directory has a unique suffix to isolate concurrent
+invocations. No AI input or output schema changes are involved.
+
+The parent and each worker hold cache leases. Normal errors stop dispatch, allow
+in-flight tasks to finish, and close workers before deleting incomplete output.
+Unexpected worker exits reject the run too; existing dead-PID cache maintenance
+can reclaim their abandoned leases or locks. Child processes avoid relying on
+thread-local state for those PID-based locks. The limit is per run, not global
+across library calls or CLI processes. `FailureDigestOptions.workers` accepts
+1 through 5; 1 uses the same preparation helper inline without a child process.
+
 #### Trace ZIP materialization cache
 
 `prepareTraceDir()` never extracts a ZIP beside the source report. It hashes the archive bytes with SHA-256 and materializes the trace under the operating system's temporary directory:
