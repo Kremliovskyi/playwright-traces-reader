@@ -99,7 +99,9 @@ npx playwright-traces-reader summary ./playwright-report/data/<sha1>.zip
 
 ## `init-skills`
 
-Scaffolds the CLI-first Copilot skill into a target repository.
+Scaffolds the CLI-first Copilot skill and its bundled references into
+`.github/skills/analyze-playwright-traces/` in a target repository. Re-running
+refreshes template-owned files without removing unrelated local files.
 
 Usage:
 
@@ -242,6 +244,10 @@ Behavior:
 - the manifest is printed to stdout and mirrored to `<runDir>/index.json`
 - read a failure folder directly; use `summary <tracePath>` only for extra detail
 
+For interpreting existing or relocated artifacts, use the bundled
+[failure output contract](../templates/skills/analyze-playwright-traces/references/failures-output.md).
+It distinguishes raw reader evidence from analyzer explanations and grouping.
+
 Examples:
 
 ```bash
@@ -346,9 +352,9 @@ Behavior:
 - works for passed, failed, and flaky traces
 - writes `digest.json` (chronological step tree), `network.ndjson` + optional
   `network-bodies.ndjson`, and `console.ndjson` into the digest folder
-- each leaf action with an `input@` snapshot gets one Action-phase DOM
-  (`dom/<callId>.html`) and the nearest screenshot (`screenshots/<callId>.png`),
-  paired 1:1
+- eligible leaf actions with an `input@` snapshot get Action-phase DOM
+  (`dom/<callId>.html`) and, when frames/resources are available, the nearest
+  screenshot (`screenshots/<callId>.png|jpeg`); neither proves the final UI state
 - every step links the seq ids of all network calls in its time window; a parent's
   links are a superset of its descendants'
 - large request and response bodies (> 32 KB) are spilled to `network-bodies.ndjson`;

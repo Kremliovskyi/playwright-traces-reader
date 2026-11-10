@@ -834,7 +834,7 @@ describe("playwright-traces-reader CLI", () => {
     }
   });
 
-  test("init-skills returns JSON by default and scaffolds the skill into the target repository", async () => {
+  test("init-skills scaffolds and refreshes the skill and references with JSON output", async () => {
     const tmpDir = path.join(
       os.tmpdir(),
       "pw-traces-reader-cli-skill",
@@ -879,6 +879,35 @@ describe("playwright-traces-reader CLI", () => {
       );
       expect(skill).not.toContain("npx playwright-traces-reader vault-read");
       expect(skill).toContain("Never remove supplied digests");
+
+      const skillDir = path.join(tmpDir, ".github", "skills", "analyze-playwright-traces");
+      const references = await Promise.all(
+        ["digest-output.md", "failures-output.md"].map(async (name) => ({
+          name,
+          destination: path.join(skillDir, "references", name),
+          content: await fs.promises.readFile(
+            path.join(__dirname, "../templates/skills/analyze-playwright-traces/references", name),
+            "utf8"
+          ),
+        }))
+      );
+      for (const reference of references) {
+        expect(skill).toContain(`./references/${reference.name}`);
+        expect(await fs.promises.readFile(reference.destination, "utf8")).toBe(reference.content);
+        await fs.promises.writeFile(reference.destination, "outdated reference");
+      }
+
+      const localNotesPath = path.join(skillDir, "references", "local-notes.md");
+      await fs.promises.writeFile(localNotesPath, "caller-owned notes");
+      await fs.promises.writeFile(path.join(skillDir, "SKILL.md"), "outdated skill");
+      const refreshed = await execCli(["init-skills", tmpDir]);
+      expect(refreshed.exitCode).toBe(0);
+      expect(JSON.parse(refreshed.stdout)).toEqual(payload);
+      expect(await fs.promises.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(skill);
+      for (const reference of references) {
+        expect(await fs.promises.readFile(reference.destination, "utf8")).toBe(reference.content);
+      }
+      expect(await fs.promises.readFile(localNotesPath, "utf8")).toBe("caller-owned notes");
     } finally {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     }

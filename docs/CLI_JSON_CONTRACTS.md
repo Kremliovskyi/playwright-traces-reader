@@ -48,6 +48,8 @@ Payload field:
 Notes:
 
 - `init-skills` does not include `count`
+- the skill's bundled references are installed beside `skillPath`; the response
+  shape is unchanged
 - use `--format text` when only a confirmation line is desired
 
 ### `failures`
@@ -181,7 +183,8 @@ Manifest fields:
 
 - `outputDir`, `runDir`, `folder` — resolved output dir, timestamped run subfolder, and the digest folder name
 - `testTitle`, `title`, `status`, `outcome`, `retryIndex`, `traceSha1`
-- `domCount` / `screenshotCount` — paired 1:1 (one Action-phase DOM + nearest screenshot per leaf action that has an `input@` snapshot)
+- `domCount` / `screenshotCount` — Action-phase DOM snapshots and available nearest
+  screenshots for eligible leaf actions; DOM can exist without a screenshot
 - `networkCallCount`, `consoleEntryCount`
 
 #### Digest folder layout
@@ -193,7 +196,8 @@ Each `<runDir>/<folder>/` contains:
 - `dom/<callId>.html` — Action-phase DOM html, one per leaf action with an `input@`
   snapshot. Absent for actions without one (e.g. assertions, waits, API calls).
 - `screenshots/<callId>.png|jpeg` — the screencast frame nearest the action's input
-  moment, paired 1:1 with the DOM file by sanitized `callId`.
+  moment when available, linked to the DOM file by sanitized `callId`. Missing
+  frames/resources leave the step's screenshot reference null.
 - `network.ndjson` — every HTTP exchange, one record per line, chronological, with a
   global `seq`. Small text/JSON request and response bodies are inlined; bodies over
   32 KB are spilled.

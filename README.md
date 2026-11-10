@@ -188,7 +188,7 @@ npx @andrii_kremlovskyi/playwright-traces-reader init-skills
 npx @andrii_kremlovskyi/playwright-traces-reader init-skills ./my-project
 ```
 
-This copies a `SKILL.md` template to `.github/skills/analyze-playwright-traces/SKILL.md`. The skill is CLI-first and points Copilot to supported `npx playwright-traces-reader ...` commands instead of temporary script generation.
+This copies the skill template and its bundled `references/` into `.github/skills/analyze-playwright-traces/`. Re-running refreshes those files without removing unrelated local files. The skill uses supported `npx playwright-traces-reader ...` commands and direct artifact reads instead of temporary script generation. Separate [digest](templates/skills/analyze-playwright-traces/references/digest-output.md) and [failure output](templates/skills/analyze-playwright-traces/references/failures-output.md) contracts cover prepared output, including copied artifacts whose original trace is unavailable. Analyzer explanations and grouping remain the consuming workflow's responsibility.
 
 The template now covers local trace analysis only. Report discovery, vault notes
 and historical performance investigation are separate skills owned and installed

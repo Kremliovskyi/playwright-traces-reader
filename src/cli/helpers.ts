@@ -72,14 +72,15 @@ export async function copySkillTemplate(targetDir: string): Promise<string> {
   const skillDir = path.join(targetDir, '.github', 'skills', 'analyze-playwright-traces');
   await fs.promises.mkdir(skillDir, { recursive: true });
 
-  const templatePath = path.resolve(__dirname, '..', '..', 'templates', 'skills', 'analyze-playwright-traces', 'SKILL.md');
+  const templateDir = path.resolve(__dirname, '..', '..', 'templates', 'skills', 'analyze-playwright-traces');
+  const templatePath = path.join(templateDir, 'SKILL.md');
   const destPath = path.join(skillDir, 'SKILL.md');
 
   if (!fs.existsSync(templatePath)) {
     throw new Error(`Template not found at ${templatePath}`);
   }
 
-  await fs.promises.copyFile(templatePath, destPath);
+  await fs.promises.cp(templateDir, skillDir, { recursive: true });
   return destPath;
 }
 
