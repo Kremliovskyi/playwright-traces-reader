@@ -23,7 +23,7 @@ Schema 10 unifies library and test runner action IDs in `callId` and removes the
 
 The scheduled matrix validates:
 
-- Production baseline: Playwright 1.59.0.
+- Production baseline: Playwright 1.63.0 (trace schema 9).
 - npm `latest`: current stable Playwright.
 - npm `next`: early warning for the next release.
 
@@ -42,6 +42,6 @@ Unknown additive event types are reported but not rejected. Malformed NDJSON alw
 
 ## CI cadence
 
-Pull requests run synthetic tests and the committed real fixture without installing a browser. A weekly and manually dispatchable workflow generates fresh Chromium reports in parallel for production, `latest`, and `next`, then runs the same command matrix.
+Pull requests run synthetic tests and the committed real fixture without installing a browser. A weekly and manually dispatchable workflow generates fresh Chromium reports in parallel for production, `latest`, and `next` on `ubuntu-latest`, then runs the same command matrix.
 
 When a scheduled lane fails, download its `trace-compatibility-*` artifact. The artifact includes the exact report, JSON reporter output, and provenance. Reproduce with the resolved package version from provenance rather than the moving tag.

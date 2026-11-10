@@ -54,7 +54,7 @@ const fixturePath = path.join(
   "tests",
   "fixtures",
   "real-reports",
-  "playwright-1.59.0.zip"
+  "playwright-1.63.0.zip"
 );
 
 let tempRoot: string;
@@ -720,8 +720,8 @@ beforeAll(async () => {
       traceVersions: number[];
       reportChecksums: Record<string, string>;
     };
-    expect(provenance.resolvedPlaywrightVersion).toBe("1.59.0");
-    expect(provenance.traceVersions).toEqual([8]);
+    expect(provenance.resolvedPlaywrightVersion).toBe("1.63.0");
+    expect(provenance.traceVersions).toEqual([9]);
     for (const [relativePath, checksum] of Object.entries(
       provenance.reportChecksums
     ))

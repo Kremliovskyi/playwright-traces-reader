@@ -2,6 +2,8 @@
 
 The trace compatibility suite is deterministic and does not use AI. It has three layers with different jobs.
 
+Use Node.js 20 or newer for development tests; the pinned Playwright 1.63.0 producer requires it. CI uses Node.js 22.
+
 ## Fast tests
 
 ```bash
@@ -42,7 +44,7 @@ default of four workers and its JSON/stdout contract are tested directly.
 npm run test:real-fixture
 ```
 
-This builds the package and runs every report/trace CLI command twice against `tests/fixtures/real-reports/playwright-1.59.0.zip`. The archive contains only `index.html`, `data/`, and `provenance.json`; it does not contain browser binaries or trace-viewer UI assets.
+This builds the package and runs every report/trace CLI command twice against `tests/fixtures/real-reports/playwright-1.63.0.zip` (trace schema 9). The archive contains only `index.html`, `data/`, and `provenance.json`; it does not contain browser binaries or trace-viewer UI assets. Synthetic tests retain coverage for older trace schemas and resource representations.
 
 The matrix discovers trace, request, attachment, call, and output identifiers from command responses. It asserts stable semantic markers and cross-file integrity instead of complete JSON snapshots or generated timings. It also hashes the copied report before and after both runs.
 
@@ -72,23 +74,23 @@ Generate a report with any published Playwright version:
 
 ```bash
 npm run compatibility:generate -- \
-  --playwright-version 1.59.0 \
-  --output ./tmp/compatibility-1.59.0
+  --playwright-version 1.63.0 \
+  --output ./tmp/compatibility-1.63.0
 ```
 
 Use an already installed browser cache when regenerating locally:
 
 ```bash
 npm run compatibility:generate -- \
-  --playwright-version 1.59.0 \
-  --output ./tmp/compatibility-1.59.0 \
+  --playwright-version 1.63.0 \
+  --output ./tmp/compatibility-1.63.0 \
   --skip-browser-install
 ```
 
 Run the same matrix against the generated report:
 
 ```bash
-PWTR_COMPAT_REPORT=./tmp/compatibility-1.59.0/playwright-report \
+PWTR_COMPAT_REPORT=./tmp/compatibility-1.63.0/playwright-report \
   npm run compatibility:run
 ```
 
@@ -98,27 +100,30 @@ The compatibility producer uses public `@playwright/test` APIs in an isolated te
 
 The production baseline is the exact Playwright version in `tests/compatibility/versions.json` and the matching committed report in `tests/fixtures/real-reports/`. It is a deterministic PR fixture, not the maximum Playwright version the reader supports. The scheduled `latest` and `next` lanes test newer versions independently.
 
-Use an exact published version, not a moving tag such as `latest`. For example, to upgrade from 1.59.0 to 1.61.1, first generate the candidate report and fixture:
+Use an exact published version, not a moving tag such as `latest`. For example, the upgrade from 1.59.0 to the current 1.63.0 baseline starts by generating the candidate report and fixture:
 
 ```bash
 npm run compatibility:generate -- \
-  --playwright-version 1.61.1 \
-  --output ./tmp/compatibility-1.61.1 \
-  --archive ./tests/fixtures/real-reports/playwright-1.61.1.zip
+  --playwright-version 1.63.0 \
+  --output ./tmp/compatibility-1.63.0 \
+  --archive ./tests/fixtures/real-reports/playwright-1.63.0.zip
 ```
 
 Validate the generated report before changing any baseline references:
 
 ```bash
-PWTR_COMPAT_REPORT=./tmp/compatibility-1.61.1/playwright-report \
+PWTR_COMPAT_REPORT=./tmp/compatibility-1.63.0/playwright-report \
   npm run compatibility:run
 ```
 
 When the candidate passes, update these baseline references together:
 
-1. Set `production` to `1.61.1` in `tests/compatibility/versions.json`.
-2. Change the fixture filename and expected `resolvedPlaywrightVersion` in `tests/realReportCompatibility.test.ts`.
-3. Replace the baseline version and fixture filename in `docs/TESTING.md` and `docs/COMPATIBILITY.md`.
+1. Set `production` to `1.63.0` in `tests/compatibility/versions.json`.
+2. Pin the `@playwright/test` development dependency to the same exact version and update the lockfile with `npm install --save-dev --save-exact @playwright/test@1.63.0`. This keeps the browser-free serial retry regression on the production baseline.
+3. Change the fixture filename, expected `resolvedPlaywrightVersion`, and expected `traceVersions` in `tests/realReportCompatibility.test.ts` to match the generated provenance.
+4. Replace the baseline version and fixture filename in `docs/TESTING.md` and `docs/COMPATIBILITY.md`.
+
+The fresh-report workflow uses `ubuntu-latest`. When its operating system changes, verify that every producer in the matrix supports the new runner; an unsupported runner can fail browser installation before compatibility is tested. Playwright 1.63.0 supports Ubuntu 26.04.
 
 Then run the complete suite:
 

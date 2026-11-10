@@ -1,6 +1,6 @@
 {
   "name": "@andrii_kremlovskyi/playwright-traces-reader",
-  "version": "4.2.8",
+  "version": "4.2.9",
   "description": "Parse Playwright trace files into structured data for AI agents and tooling",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -39,7 +39,7 @@
     "url": "https://github.com/Kremliovskyi/playwright-traces-reader/issues"
   },
   "devDependencies": {
-    "@playwright/test": "1.59.0",
+    "@playwright/test": "1.63.0",
     "@types/adm-zip": "^0.5.8",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.0",
