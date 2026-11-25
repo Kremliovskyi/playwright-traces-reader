@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import {
   extractFailureScreenshots,
@@ -411,7 +412,7 @@ export async function writeFailureDigests(
         `${sanitizeFolderName(entry.testTitle ?? entry.title)}__retry${entry.retryIndex}`,
         usedFolderNames,
       );
-      await fs.promises.rename(tasks[index]!.folderDir, path.join(runDir, folder));
+      await renameFailureFolder(tasks[index]!.folderDir, path.join(runDir, folder));
       manifestEntries.push({ ...entry, folder });
     }
     const manifest: FailuresCommandJson = {
@@ -474,6 +475,18 @@ export async function prepareFailureDigest(
     });
   } catch (error) {
     throw new Error(`Failed to prepare trace ${task.tracePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function renameFailureFolder(source: string, destination: string): Promise<void> {
+  for (let retries = 0; ; retries++) {
+    try {
+      await fs.promises.rename(source, destination);
+      return;
+    } catch (error) {
+      if (retries === 5) throw error;
+      await delay(100 * 2 ** retries);
+    }
   }
 }
 

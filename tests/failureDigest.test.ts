@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import timers = require('node:timers/promises');
 import AdmZip from 'adm-zip';
 import { runCli } from '../dist/cli';
 import { writeFailureDigests as writeDigests, type FailureDigestOptions } from '../dist/failureDigest';
@@ -74,6 +75,39 @@ describe('conservative failure preparation', () => {
   function archiveWasRead(sha1: string): boolean {
     return reads.mock.calls.some(([file]) => file === path.join(fixture.dataDir, `${sha1}.zip`));
   }
+
+  function mockFirstFolderRename() {
+    const rename = fs.promises.rename;
+    const publish = jest.fn(rename);
+    jest.spyOn(fs.promises, 'rename').mockImplementation((source, destination) =>
+      path.basename(String(source)) === '.attempt-0' ? publish(source, destination) : rename(source, destination),
+    );
+    return publish;
+  }
+
+  test('publishes the prepared folder after transient rename errors without an error code', async () => {
+    const delay = jest.spyOn(timers, 'setTimeout').mockResolvedValue(undefined);
+    const publish = mockFirstFolderRename().mockRejectedValueOnce(new Error('temporarily locked'));
+    const manifest = await writeFailureDigests(fixture.dataDir, outputDir);
+
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls[1]).toEqual(publish.mock.calls[0]);
+    expect(delay.mock.calls).toEqual([[100]]);
+    const folder = path.join(manifest.runDir, manifest.failures[0]!.folder);
+    expect(fs.existsSync(path.join(folder, 'failure.json'))).toBe(true);
+    expect(fs.existsSync(path.join(manifest.runDir, '.attempt-0'))).toBe(false);
+  });
+
+  test('bounds persistent rename retries, surfaces the last error, and removes the incomplete run', async () => {
+    const delay = jest.spyOn(timers, 'setTimeout').mockResolvedValue(undefined);
+    const lastError = new Error('still locked');
+    const publish = mockFirstFolderRename().mockRejectedValueOnce(new Error('first failure')).mockRejectedValue(lastError);
+
+    await expect(writeFailureDigests(fixture.dataDir, outputDir)).rejects.toBe(lastError);
+    expect(publish).toHaveBeenCalledTimes(6);
+    expect(delay.mock.calls).toEqual([[100], [200], [400], [800], [1600]]);
+    expect(await fs.promises.readdir(outputDir)).toEqual([]);
+  });
 
   test('does not open known-passing ZIPs, but prepares every failed and skipped attempt', async () => {
     const manifest = await writeFailureDigests(fixture.dataDir, outputDir);

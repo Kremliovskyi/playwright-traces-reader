@@ -232,6 +232,10 @@ Behavior:
 - folders are created under `<outputDir>/run-<timestamp>-<unique-suffix>/`
 - folder naming, duplicate-title suffixes, and manifest order remain deterministic
   even when workers finish out of order
+- if a prepared folder cannot be renamed to its final name, the reader retries
+  only the rename on any platform or filesystem, regardless of the error code.
+  It waits 100, 200, 400, 800, and 1600 ms between attempts. If all six attempts
+  fail, the last error is reported and the incomplete run is cleaned up.
 - preparation errors stop new work, drain and close workers, remove the incomplete
   run, and return a nonzero exit code without success JSON; existing runs are kept
 - each folder contains `failure.json` plus `screenshots/`, the Action-phase DOM at
